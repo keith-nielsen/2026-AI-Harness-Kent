@@ -1,9 +1,63 @@
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
 .venv/
 venv/
-.env
-.DS_Store
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# Shell
 *.swp
-.idea/
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
 .vscode/
+.idea/
+*.sublime-*
+
+# Secrets (templates exist in configs/env-templates.md)
+.env
+**/secrets/*.txt
+**/secrets/*.env
+!**/secrets/.gitkeep
+
+# Docker
+docker-compose.override.yml
+
+# SQLite databases (schemas are in schemas/; runtime DBs are host-generated)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Install artifacts (runtime generated)
+/etc/kent/
+/var/lib/kent/
+
+# Logs
+*.log
+
+# Backup files
+*.bak
+*.bak.*
+
+# Large model artifacts
+*.gguf
+*.safetensors
+*.bin
+!templates/requirements.txt

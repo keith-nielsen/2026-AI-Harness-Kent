@@ -1,0 +1,49 @@
+# /etc/promtail/promtail.yaml
+# Kent — Promtail Log Shipper Configuration
+
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://127.0.0.1:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: litellm
+          __path__: __LOGS_DIR__/gateway/*.log
+
+  - job_name: kent
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: kent
+          __path__: __LOGS_DIR__/kent/*.log
+
+  - job_name: squid_access
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: squid
+          __path__: /var/log/squid/access.log
+
+  - job_name: gitea
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: gitea
+          __path__: /home/gitea/log/*.log
+
+  - job_name: hmac_chain
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: hmac_chain
+          __path__: __LOGS_DIR__/hmac_chain.log

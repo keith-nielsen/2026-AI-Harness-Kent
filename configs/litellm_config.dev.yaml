@@ -1,0 +1,53 @@
+# /etc/litellm/config.dev.yaml
+# Kent — Inference Gateway Configuration (Dev)
+#
+# For testing on limited VRAM (e.g., 8GB NVIDIA GPU).
+# Swaps production models for smaller standins.
+# Total VRAM: ~5.7 GB (leaves ~2 GB for KV cache).
+#
+# Usage: deploy this as config.yaml when --dev is set.
+
+model_list:
+  - model_name: "router"
+    litellm_params:
+      model: "ollama/gemma3:1b"
+      api_base: "http://localhost:11434"
+
+  - model_name: "fast"
+    litellm_params:
+      model: "ollama/qwen3:1.7b-nothink"
+      api_base: "http://localhost:11434"
+
+  - model_name: "smart"
+    litellm_params:
+      model: "ollama/qwen3:4b-nothink"
+      api_base: "http://localhost:11434"
+    model_info:
+      metadata:
+        routing_tier: "primary"
+
+  - model_name: "frontier"
+    litellm_params:
+      model: "deepseek/deepseek-v4-pro"
+      api_key: "os.environ/DEEPSEEK_API_KEY"
+    model_info:
+      metadata:
+        routing_tier: "primary"
+
+  - model_name: "frontier"
+    litellm_params:
+      model: "anthropic/claude-opus-4-7"
+      api_key: "os.environ/ANTHROPIC_API_KEY"
+    model_info:
+      metadata:
+        routing_tier: "fallback"
+
+router_settings:
+  routing_strategy: "simple-shuffle"
+  num_retries: 1
+  timeout: 120
+
+general_settings:
+  master_key: "os.environ/LITELLM_ADMIN_KEY"
+  database_url: "os.environ/DATABASE_URL"
+  enable_key_tracking: true

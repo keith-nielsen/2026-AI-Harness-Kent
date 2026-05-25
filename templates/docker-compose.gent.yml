@@ -1,0 +1,78 @@
+# =============================================================================
+# Kent — docker-compose.gent.yml
+# Template for spawning a Gent fractal stack.
+# Copied and parameterised by spawn-gent at runtime.
+#
+# Variables replaced at spawn time:
+#   ${STACK_ID}     — 8-char hex UUID
+#   ${STACK_DIR}    — /home/enterprise/stacks/${STACK_ID}
+# =============================================================================
+
+services:
+  gent:
+    image: kent/gent:latest
+    container_name: "gent-${STACK_ID}"
+    restart: unless-stopped
+    networks:
+      - kent-gent-net
+    environment:
+      STACK_ID: "${STACK_ID}"
+      GATEWAY_URL: "http://172.30.0.1:4000"
+      GITEA_URL: "http://172.30.0.1:3000"
+      HTTP_PROXY: "http://172.30.0.1:3128"
+      HTTPS_PROXY: "http://172.30.0.1:3128"
+      NO_PROXY: "172.30.0.1,localhost,127.0.0.1,telemetry.crewai.com"
+    volumes:
+      - "${STACK_DIR}/data:/data"
+    secrets:
+      - gent_key
+      - gitea_pat
+    security_opt:
+      - no-new-privileges
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+      - /app/.local:size=50M,uid=999,gid=999
+      - /app/.cache:size=50M,uid=999,gid=999
+      - /app/.config:size=10M,uid=999,gid=999
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - NET_BIND_SERVICE
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/data/stack.db').execute('SELECT 1')"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  litestream:
+    image: litestream/litestream:latest
+    container_name: "litestream-${STACK_ID}"
+    restart: unless-stopped
+    networks:
+      - kent-gent-net
+    volumes:
+      - "${STACK_DIR}/data:/data:ro"
+      - "${STACK_DIR}/litestream.yml:/etc/litestream.yml:ro"
+    command: replicate
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+secrets:
+  gent_key:
+    file: "${STACK_DIR}/secrets/gent_key.txt"
+  gitea_pat:
+    file: "${STACK_DIR}/secrets/gitea_pat.txt"
+
+networks:
+  kent-gent-net:
+    external: true

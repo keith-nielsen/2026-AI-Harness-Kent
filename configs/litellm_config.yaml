@@ -1,0 +1,67 @@
+# /etc/litellm/config.yaml
+# Kent — Inference Gateway Configuration (Production)
+#
+# All inference consumers hit localhost:4000 with a logical model name.
+# This file maps logical names to physical endpoints.
+# Swap models or add cluster nodes here — zero application code changes.
+#
+# DATABASE_URL is read from the environment (set via gateway.env).
+# model_info uses 'metadata' for Kent-specific fields (LiteLLM validates
+# the 'tier' field as 'free'|'paid' only).
+
+model_list:
+  # --- T0 Router ---
+  - model_name: "router"
+    litellm_params:
+      model: "ollama/gemma4:4b-q8_0"
+      api_base: "http://localhost:11434"
+
+  # --- T1 Fast ---
+  - model_name: "fast"
+    litellm_params:
+      model: "ollama/gemma4:26b-a4b-q8_0"
+      api_base: "http://localhost:11434"
+
+  # --- T2 Smart (primary: local) ---
+  - model_name: "smart"
+    litellm_params:
+      model: "ollama/qwen3.6:27b-nothink"
+      api_base: "http://localhost:11434"
+    model_info:
+      metadata:
+        routing_tier: "primary"
+  # Phase 2 cluster: add cluster endpoint as primary, local becomes fallback
+  # - model_name: "smart"
+  #   litellm_params:
+  #     model: "ollama/qwen3.6:27b-nothink"
+  #     api_base: "http://<cluster-ip>:11434"
+  #   model_info:
+  #     metadata:
+  #       routing_tier: "primary"
+
+  # --- T3 Frontier (primary: DeepSeek, fallback: Opus) ---
+  - model_name: "frontier"
+    litellm_params:
+      model: "deepseek/deepseek-v4-pro"
+      api_key: "os.environ/DEEPSEEK_API_KEY"
+    model_info:
+      metadata:
+        routing_tier: "primary"
+
+  - model_name: "frontier"
+    litellm_params:
+      model: "anthropic/claude-opus-4-7"
+      api_key: "os.environ/ANTHROPIC_API_KEY"
+    model_info:
+      metadata:
+        routing_tier: "fallback"
+
+router_settings:
+  routing_strategy: "simple-shuffle"
+  num_retries: 1
+  timeout: 120
+
+general_settings:
+  master_key: "os.environ/LITELLM_ADMIN_KEY"
+  database_url: "os.environ/DATABASE_URL"
+  enable_key_tracking: true

@@ -1,0 +1,65 @@
+# =============================================================================
+# Crew Template: Research — Task Pipeline
+#
+# Sequential: research_task -> analysis_task -> review_task
+# Each task's output feeds the next as context.
+# =============================================================================
+
+research_task:
+  description: >
+    Research the specified topic thoroughly. Find key facts from available
+    sources, identify primary vs secondary evidence, note contradictions
+    or gaps, and produce a structured summary with source attribution.
+
+    Topic: {topic}
+    Available sources: {sources}
+    Scope constraints: {scope}
+  expected_output: >
+    A structured research summary containing:
+    - Key findings with source attribution (URL, document name, or data reference)
+    - Confidence level for each finding (high/medium/low with brief justification)
+    - Contradictions or conflicting information identified across sources
+    - Gaps where information was expected but not found
+    - Recommended follow-up if gaps are significant
+  agent: researcher
+
+analysis_task:
+  description: >
+    Analyse the research findings for patterns, significance, and actionable
+    insights. Evaluate whether the evidence supports clear conclusions or
+    whether uncertainty dominates. Identify the most important findings
+    and explain why they matter in the context of the original question.
+
+    Original question: {topic}
+    Target audience: {audience}
+  expected_output: >
+    An analysis section containing:
+    - Top 3-5 insights ranked by significance, with supporting evidence references
+    - Assessment of overall evidence quality (strong/mixed/weak)
+    - Identification of any findings that challenge conventional assumptions
+    - Practical implications or next steps if applicable
+    - Honest statement of what the evidence does NOT tell us
+  agent: analyst
+  context:
+    - research_task
+
+review_task:
+  description: >
+    Review the combined research and analysis output for accuracy,
+    completeness, and logical consistency. Verify that cited sources
+    support the claims made, that confidence levels are calibrated,
+    and that the deliverable answers the original question.
+
+    Original question: {topic}
+    Quality bar: {quality_bar}
+  expected_output: >
+    A review assessment containing:
+    - Overall quality rating (pass / needs revision / fail)
+    - List of issues found with severity (critical/major/minor)
+    - Specific corrections needed (not vague suggestions)
+    - Verification status of key claims (confirmed/unverified/contradicted)
+    - Final recommendation on whether the output is ready for delivery
+  agent: reviewer
+  context:
+    - research_task
+    - analysis_task

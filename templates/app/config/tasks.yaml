@@ -1,0 +1,50 @@
+# =============================================================================
+# Kent — Default Task Templates
+#
+# Fallback task definitions used when the CEO doesn't provide explicit
+# task descriptions. In practice, the CEO builds task_descriptions
+# dynamically from kanban items; these serve as structural examples.
+#
+# Fields:
+#   description:      What the task requires
+#   expected_output:  What a good result looks like
+# =============================================================================
+
+research_task:
+  description: >
+    Research the given topic thoroughly. Find key facts, identify
+    primary sources, note any contradictions or gaps in available
+    information, and produce a structured summary.
+  expected_output: >
+    A structured research summary with: key findings (with source
+    attribution), confidence level for each finding, identified gaps
+    or contradictions, and recommended next steps.
+
+analysis_task:
+  description: >
+    Analyse the provided data or information. Identify patterns,
+    extract insights, and present findings with appropriate
+    statistical context and caveats.
+  expected_output: >
+    An analysis report with: methodology description, key findings
+    with supporting evidence, visualisation recommendations if
+    applicable, and limitations of the analysis.
+
+writing_task:
+  description: >
+    Produce a well-structured written deliverable based on the
+    research and analysis provided. Adapt tone and depth to the
+    specified audience.
+  expected_output: >
+    A polished written document with: clear structure, cited sources,
+    appropriate technical depth, and no unsubstantiated claims.
+
+review_task:
+  description: >
+    Review the deliverable for accuracy, completeness, logical
+    consistency, and adherence to requirements. Check all citations
+    and flag any issues.
+  expected_output: >
+    A review report listing: issues found (with severity), specific
+    corrections needed, verification status of key claims, and an
+    overall quality assessment (pass/needs revision/fail).

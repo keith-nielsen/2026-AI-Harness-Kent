@@ -1,0 +1,10 @@
+# Kent — Gent container Python dependencies
+# hermes-agent is NOT installed in Gent containers — the CEO code
+# uses CrewAI directly and talks to the gateway via HTTP.
+# Kent (host-side) runs Hermes; Gents do not.
+crewai==1.14.3
+litellm>=1.50.0
+requests>=2.32.0
+pydantic>=2.9.0
+pyyaml>=6.0
+python-dotenv>=1.2.2

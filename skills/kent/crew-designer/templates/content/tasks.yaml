@@ -1,0 +1,68 @@
+# =============================================================================
+# Crew Template: Content — Task Pipeline
+#
+# Sequential: research_task -> writing_task -> editing_task
+# =============================================================================
+
+research_task:
+  description: >
+    Gather background material for the content piece. Focus on finding
+    facts, statistics, examples, and context that the writer will need.
+    Organise by relevance to the writing task, not by source.
+
+    Content topic: {topic}
+    Target audience: {audience}
+    Available sources: {sources}
+    Output format: {output_format}
+  expected_output: >
+    A research brief containing:
+    - Key facts and statistics with source attribution
+    - Relevant examples or case studies
+    - Counterarguments or alternative perspectives (if applicable)
+    - Suggested structure or angle based on the material found
+    - Gaps where the writer will need to generalise or caveat
+  agent: researcher
+
+writing_task:
+  description: >
+    Write a {output_format} on the specified topic for the target
+    audience. Use the research brief as source material. Adapt tone
+    and depth to the audience. Cite sources where claims need backing.
+    Flag any sections where the research was insufficient.
+
+    Topic: {topic}
+    Target audience: {audience}
+    Tone: {tone}
+    Length guidance: {length}
+    Special requirements: {requirements}
+  expected_output: >
+    A complete draft {output_format} that:
+    - Addresses the topic with appropriate depth for the audience
+    - Uses clear prose (not bullet lists unless the format demands them)
+    - Cites sources for factual claims
+    - Includes section headings for structure
+    - Flags any sections built on thin evidence with inline notes
+  agent: writer
+  context:
+    - research_task
+
+editing_task:
+  description: >
+    Edit the draft for clarity, accuracy, tone, and completeness.
+    Verify factual claims against the research brief. Tighten prose.
+    Ensure the piece meets the stated requirements and is ready for
+    delivery to the operator.
+
+    Quality bar: {quality_bar}
+    Special requirements: {requirements}
+  expected_output: >
+    The edited final version of the content piece, with:
+    - All factual claims verified against the research
+    - Prose tightened and clarified
+    - Consistent tone throughout
+    - An editorial note listing any remaining issues or caveats
+    - Overall assessment: ready for delivery / needs another pass
+  agent: editor
+  context:
+    - research_task
+    - writing_task

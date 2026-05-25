@@ -1,0 +1,36 @@
+# /etc/prometheus/prometheus.yml
+# Kent — Prometheus Configuration
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "node"
+    static_configs:
+      - targets: ["127.0.0.1:9100"]
+
+  - job_name: "litellm"
+    static_configs:
+      - targets: ["127.0.0.1:4000"]
+    metrics_path: "/metrics"
+
+  - job_name: "gitea"
+    static_configs:
+      - targets: ["127.0.0.1:3000"]
+    metrics_path: "/metrics"
+
+  - job_name: "loki"
+    static_configs:
+      - targets: ["127.0.0.1:3100"]
+    metrics_path: "/metrics"
+
+  # Placeholder: Ollama exporter (add when available)
+  # - job_name: "ollama"
+  #   static_configs:
+  #     - targets: ["127.0.0.1:9101"]
+
+  # Placeholder: Squid exporter
+  # - job_name: "squid"
+  #   static_configs:
+  #     - targets: ["127.0.0.1:9301"]

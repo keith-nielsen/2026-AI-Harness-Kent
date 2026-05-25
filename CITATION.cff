@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this work in your research or deployment, please cite it as below."
+authors:
+  - family-names: Nielsen
+    given-names: Keith
+    orcid: https://orcid.org/TODO
+title: "Kent — Enterprise Agentic AI Stack for High-Governance Environments"
+version: 1.0.0
+doi: 10.5281/zenodo.TODO
+date-released: 2026
+repository-code: "https://github.com/keith-nielsen/2026-AI-Harness-Kent"
+license: Apache-2.0
+keywords:
+  - agentic-ai
+  - llm-inference
+  - safety-harness
+  - governance
+  - crewai
+  - local-ai
+  - self-hosted
+  - mhd
+  - litemllm
+  - ollama

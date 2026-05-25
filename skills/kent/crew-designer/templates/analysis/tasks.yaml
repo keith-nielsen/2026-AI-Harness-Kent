@@ -1,0 +1,97 @@
+# =============================================================================
+# Crew Template: Analysis — Task Pipeline
+#
+# Hierarchical: Analyst manages. Delegates collection and writing.
+# Reviewer validates independently after the main pipeline.
+#
+# Task flow:
+#   collection_task (Collector)
+#   -> analysis_task (Analyst, uses collection output)
+#   -> report_task (Writer, uses analysis output)
+#   -> review_task (Reviewer, uses all prior outputs)
+# =============================================================================
+
+collection_task:
+  description: >
+    Gather data from the specified sources. Clean and normalise into
+    a consistent format. Document any data quality issues found.
+
+    Data sources: {sources}
+    Expected data format: {data_format}
+    Time range: {time_range}
+    Specific fields needed: {fields}
+  expected_output: >
+    A data package containing:
+    - Cleaned, normalised data in the specified format
+    - Data dictionary describing each field (name, type, source, notes)
+    - Data quality report (missing values, outliers, inconsistencies found)
+    - Total record count and source breakdown
+    - Any access issues or sources that could not be reached
+  agent: collector
+
+analysis_task:
+  description: >
+    Analyse the collected data to answer the specified question.
+    Design an appropriate analytical approach, execute it, and
+    document the methodology. Distinguish findings from interpretation.
+
+    Analysis question: {topic}
+    Analytical approach: {approach}
+    Comparison dimensions: {dimensions}
+    Success criteria: {success_criteria}
+  expected_output: >
+    An analysis brief containing:
+    - Methodology description (approach, assumptions, tools used)
+    - Key findings with supporting evidence (data references, not just assertions)
+    - Pattern identification with strength assessment
+    - Comparison results across specified dimensions
+    - Preliminary conclusions with confidence levels
+    - Identified limitations of the analysis
+  agent: analyst
+  context:
+    - collection_task
+
+report_task:
+  description: >
+    Produce the final analysis report based on the analytical findings.
+    Structure for the target audience. Include methodology, findings,
+    evidence, limitations, and actionable recommendations.
+
+    Target audience: {audience}
+    Report format: {output_format}
+    Length guidance: {length}
+  expected_output: >
+    A complete analysis report containing:
+    - Executive summary (2-3 sentences)
+    - Methodology section
+    - Key findings with supporting data
+    - Comparative analysis (if applicable)
+    - Limitations and caveats
+    - Recommendations or next steps
+    - Data appendix or references
+  agent: writer
+  context:
+    - collection_task
+    - analysis_task
+
+review_task:
+  description: >
+    Review the analysis report for methodological soundness, accurate
+    data representation, logical consistency, and honest limitation
+    reporting. Check that conclusions follow from evidence.
+
+    Quality bar: {quality_bar}
+    Original question: {topic}
+  expected_output: >
+    A review assessment containing:
+    - Methodological soundness rating (sound / concerns / flawed)
+    - Data accuracy check (calculations verified / issues found)
+    - Logic check (conclusions follow from evidence / gaps identified)
+    - Limitations assessment (honestly reported / understated / missing)
+    - Specific issues with remediation steps
+    - Overall quality rating (pass / needs revision / fail)
+  agent: reviewer
+  context:
+    - collection_task
+    - analysis_task
+    - report_task
