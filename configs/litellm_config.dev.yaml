@@ -4,8 +4,8 @@
 # Architecture:
 #   Router  → Qwen2.5-0.5B (CPU via Ollama)
 #   Fast    → Qwen2.5-7B Q4_K_M (local GPU via Ollama, mechanical tasks only)
-#   Smart   → DeepSeek V4 Flash (cloud, routine reasoning)
-#   Frontier→ DeepSeek V4 Pro (cloud, hard problems)
+#   Smart   → DeepSeek V4 Flash:free (cloud)
+#   Frontier→ DeepSeek V4 Flash:free (cloud, same model for now)
 #
 # The Arch Router (in the Gent CEO) classifies tasks:
 #   confidence >= 0.99 (purely mechanical) → fast
@@ -30,10 +30,10 @@ model_list:
       model: "deepseek/deepseek-v4-flash:free"
       api_key: "os.environ/DEEPSEEK_API_KEY"
 
-  # --- T3 Frontier (cloud — hard problems) ---
+  # --- T3 Frontier (cloud — also flash:free for now) ---
   - model_name: "frontier"
     litellm_params:
-      model: "deepseek/deepseek-v4-pro"
+      model: "deepseek/deepseek-v4-flash:free"
       api_key: "os.environ/DEEPSEEK_API_KEY"
 
 router_settings:
