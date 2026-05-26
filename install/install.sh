@@ -36,7 +36,7 @@ Phases:
   1  Storage & Git  — SQLite, Gitea, schema init
   2  Inference      — Ollama, model pulls, Unix socket
   3  Gateway        — LiteLLM, scoped API keys, auth tests
-  4  Security       — Squid proxy, Docker network, AIDE, firewall
+  4  Security       — Squid proxy, Docker network, AIDE, firewall, systemd-oomd
   5  Observability  — Prometheus, Loki, Grafana, exporters
   6  Kent Agent     — Hermes install, kent.db, Gitea PAT, crons
   7  Gent Template  — Docker image, compose template, spawn/destroy

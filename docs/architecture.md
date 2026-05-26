@@ -1027,6 +1027,15 @@ Service-specific additions:
 | `loki` | `/var/lib/loki` | — | — |
 | `promtail` | — | `ReadOnlyPaths=/home/enterprise/logs` | — |
 | `squid` | `/var/spool/squid`, `/var/log/squid` | — | — |
+| `systemd-oomd` | — | `ManagedOOMSwap=kill` (applied to ollama, litellm, kent, squid) | — |
+
+#### ManagedOOM Flag Strategy
+
+Services expected to consume significant memory (Ollama model loading, LiteLLM gateway, Kent agent, Squid proxy) are configured with `ManagedOOMSwap=kill` and `ManagedOOMMemoryPressure=kill`. systemd-oomd monitors PSI (Pressure Stall Information) via `/proc/pressure/memory` and, when swap exceeds 90% or sustained memory pressure exceeds the threshold duration, sends SIGTERM to the offending cgroup. This provides controlled degradation — one service restarts rather than the entire system thrashing.
+
+**Gent containers are excluded** from systemd-oomd management. They are isolated via Docker's `mem_limit` and `memswap_limit` in the docker-compose template, which is a simpler and more predictable sandbox boundary.
+
+The Kent agent has a lower `ManagedOOMMemoryPressureLimit=70%` (vs the 60% default) because an unresponsive Kent directly impacts the human operator's ability to intervene. Kent receives slightly more margin before OOMD acts.
 
 ---
 
@@ -1047,6 +1056,7 @@ Service-specific additions:
 | Promtail | `promtail.service` | Log shipping |
 | node_exporter | `node-exporter.service` | Host metrics |
 | AIDE | Cron | File integrity |
+| systemd-oomd | `systemd-oomd.service` | Monitors PSI memory pressure; kills cgroup when swap exceeds 90% or sustained memory pressure exceeds 60% |
 
 ### 20.2 Docker (workload plane)
 
@@ -1131,7 +1141,30 @@ detect_distro() {
 | **Total (production)** | **~60 GB** | |
 | **Total (dev, small models)** | **~35 GB** | |
 
-### 22.2 Growth Management
+### 22.2 Swap Sizing
+
+System memory pressure during AI workloads can cause thrashing if swap is undersized. Recommended configuration for the target hardware:
+
+| Resource | Value | Rationale |
+|----------|-------|-----------|
+| System RAM | 64 GB | Discrete GPU VRAM is separate (96 GB) |
+| Swap file | **16 GB** | Covers transient spikes from multi-service + multi-browser workloads |
+| `vm.swappiness` | **10** | Prevents premature swapping; keeps AI model data in RAM |
+
+Configuration commands:
+```bash
+sudo fallocate -l 16G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.d/99-swap.conf
+sudo sysctl -w vm.swappiness=10
+```
+
+systemd-oomd provides a second safety layer: when swap exceeds 90% or PSI memory pressure exceeds 60% for 20 seconds, OOMD kills the offending cgroup rather than letting the system thrash (see §19).
+
+### 22.3 Growth Management
 
 SQLite text compresses well. Old conversation history in `kent.db` can be archived to NAS with `VACUUM` reclaiming space. Prometheus retention is configurable (default 90 days). Loki retention is configurable per tenant. Log rotation prevents unbounded growth.
 
@@ -1162,6 +1195,7 @@ When the BD395i MAX (or comparable hardware) is available:
 | Gent lateral movement | Docker isolation + filesystem permissions + per-Gent credentials |
 | Log tampering | HMAC chained audit log + AIDE file integrity |
 | Hermes rapid release cadence | Pin version; test upgrades on staging Gent first |
+| Memory thrashing under concurrent services | 16 GB swap + swappiness=10 + systemd-oomd with `ManagedOOMSwap=kill` on all services; validated by stress test to 96% combined utilization |
 | Kent bottleneck | Load analysis: ~200K-350K tokens/day for 3 Gents is manageable at 35 t/s |
 | Secret leakage | Mounted files (not env vars); per-Gent derived keys; 30-day rotation |
 | Stale access grants | Auto-expiry on all grants; hourly check; monthly full review |
@@ -1186,3 +1220,5 @@ After completing all installation phases, verify manually:
 12. **Key scoping**: Confirm a `GENT_KEY` gets 403 on `model: "frontier"` (tested in Phase 3).
 13. **HMAC chain**: Run `validate-hmac-chain.sh` → confirm chain integrity.
 14. **Gent destruction**: Destroy the test Gent → confirm container removed, user deleted, registry updated.
+15. **systemd-oomd**: Run `systemctl status systemd-oomd` → confirm active. Check `journalctl -u systemd-oomd` → confirm no unexpected kills. Run stress test (see `docs/references/swap_stress_aggressive.csv`) to validate PSI monitoring.
+16. **Swap sizing**: Run `swapon --show` → confirm 16 GB. Run `sysctl vm.swappiness` → confirm 10.

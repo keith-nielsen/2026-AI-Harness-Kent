@@ -97,6 +97,41 @@ elif [[ "$FW_MGR" == "firewalld" ]]; then
     log "  firewalld configured."
 fi
 
+# ─── 4.6 systemd-oomd (Memory Pressure Guard) ────────────────────────────────
+log "Installing systemd-oomd..."
+pkg_install systemd-oomd
+
+# Create drop-in configs for each Kent service to opt into OOMD management
+cat > /etc/systemd/system/ollama.service.d/oomd.conf << 'EOF'
+[Service]
+ManagedOOMSwap=kill
+ManagedOOMMemoryPressure=kill
+EOF
+
+cat > /etc/systemd/system/litellm.service.d/oomd.conf << 'EOF'
+[Service]
+ManagedOOMSwap=kill
+ManagedOOMMemoryPressure=kill
+EOF
+
+cat > /etc/systemd/system/kent.service.d/oomd.conf << 'EOF'
+[Service]
+ManagedOOMSwap=kill
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=70%
+EOF
+
+cat > /etc/systemd/system/squid.service.d/oomd.conf << 'EOF'
+[Service]
+ManagedOOMSwap=kill
+ManagedOOMMemoryPressure=kill
+EOF
+
+# Gent containers are managed via Docker mem_limit, not systemd-oomd.
+
+enable_and_start systemd-oomd
+log "  systemd-oomd enabled with ManagedOOM=kill on ollama, litellm, kent, squid."
+
 # ─── Tests ────────────────────────────────────────────────────────────────────
 test_gate "Squid listening" "ss -tlnp | grep -q ':${SQUID_PORT}'"
 test_gate "Docker network exists" "docker network inspect ${DOCKER_NETWORK} >/dev/null 2>&1"
@@ -110,5 +145,9 @@ test_gate "Squid proxies GET requests" "[[ '$PROXY_GET' == '200' ]]"
 # POST blocking from Docker bridge is tested in Phase 8 (E2E) inside a container.
 # Host-originated requests match the 'localhost' ACL which is intentionally unrestricted.
 log "  NOTE: POST blocking test deferred to Phase 8 (requires container on Docker bridge)."
+
+test_gate "systemd-oomd running" "systemctl is-active --quiet systemd-oomd"
+test_gate "OOMD swap monitoring active" "busctl call org.freedesktop.oom1 /org/freedesktop/oom1 org.freedesktop.oom1.Manager GetSwapUsedLimit 2>/dev/null | head -1 | grep -q '90'"
+test_gate "Ollama OOMD drop-in exists" "test -f /etc/systemd/system/ollama.service.d/oomd.conf"
 
 log "Phase 4 complete."
