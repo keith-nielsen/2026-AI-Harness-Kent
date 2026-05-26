@@ -240,41 +240,53 @@ All entities use this function. No direct Ollama URLs anywhere in application co
 
 ```python
 class RouteDecision(BaseModel):
-    tier: Literal["fast", "smart", "frontier"]
-    review_required: bool
+    tier: Literal["fast", "frontier"]
     confidence: float       # 0.0-1.0
-    escalation_reason: str  # empty if tier != frontier
+    reason: str             # empty if fast, explanation if frontier
 ```
 
-### 4.2 Routing Rules
+### 4.2 Routing Rules (Dev — RTX 2060 SUPER 8GB)
 
-| Signal | → Tier | review_required |
-|---|---|---|
-| Formatting, extraction, summarization, translation | T1 fast | False |
-| Code generation, multi-step reasoning, planning | T2 smart | True |
-| Ambiguous / confidence < 0.7 | T2 smart | True |
-| External APIs / financial data / regulatory | T2 smart | True |
-| Retry after T2 failure | T3 frontier | True |
-| Explicitly flagged "beyond local capability" | T3 frontier | True |
-| Confidence < 0.4 on any classification | T3 frontier | True |
-| Novel domain with no prior task history | T2 smart (first), T3 if low confidence | True |
+The router uses a strict binary decision: mechanical tasks run on the local 7B GPU model; everything else goes to the cloud.
 
-### 4.3 Implementation
+| Signal | → Tier | Conditions |
+|--------|--------|------------|
+| Formatting, extraction, classification, transformation, template filling, grammar correction, data cleaning | T1 fast | Confidence >= 0.99 |
+| Code generation, planning, analysis, creative writing, domain expertise, multi-step logic, problem-solving, debugging, tool orchestration, context > 4K | T3 frontier | Always |
+| Anything uncertain | T3 frontier | Confidence < 0.99 |
+
+The 0.99 threshold ensures the local model only handles tasks that are near-guaranteed to succeed. False negatives (sending a mechanical task to cloud) cost fractions of a cent. False positives (running a reasoning task on the 7B) waste time and produce poor output.
+
+### 4.3 Production Routing (Strix Halo / M5 MAX — 128GB)
+
+On the target machines with 96+ GB shared memory, all three tiers run locally:
+
+| Signal | → Tier | Conditions |
+|--------|--------|------------|
+| Formatting, extraction, summarization, translation | T1 fast | Confidence >= 0.7 |
+| Code generation, multi-step reasoning, planning | T2 smart | Confidence >= 0.4, < 0.7 |
+| Exceeds local capability, novel domain, low confidence | T3 frontier | Confidence < 0.4 or explicit flag |
+
+The tiers are distinct physical models on target hardware. The dev machine conflates fast+smart into one local model and routes frontier to cloud.
+
+### 4.4 Implementation
 
 ```python
 ROUTER_SYSTEM = """Classify the task. Respond ONLY with JSON:
-{"tier":"fast"|"smart"|"frontier",
- "review_required":true|false,
+{"tier":"fast"|"frontier",
  "confidence":0.0-1.0,
- "escalation_reason":"...or empty"}
+ "reason":""}
 
 Rules:
-- Rote formatting/extraction/translation → fast, review=false
-- Code, planning, reasoning, multi-step → smart, review=true
-- Exceeds local capability → frontier, review=true
-- Confidence < 0.7 → smart, review=true
-- Confidence < 0.4 → frontier, review=true
-- When unsure, default smart + review=true"""
+- "fast" means: this is a PURELY MECHANICAL task requiring zero
+  reasoning. Examples: formatting, extraction, transformation,
+  classification, template filling, grammar correction, data
+  cleaning, simple summarization, structured output conversion.
+- "frontier" means: ANYTHING else — code generation, planning,
+  analysis, creative writing, domain expertise, multi-step logic,
+  problem-solving, debugging, tool orchestration, context >4K.
+- Only choose "fast" if you are 100% certain. When in doubt,
+  choose "frontier"."""
 
 def route(task: str) -> RouteDecision:
     raw = query_model(
@@ -282,12 +294,9 @@ def route(task: str) -> RouteDecision:
         user=task, json_mode=True,
     )
     d = RouteDecision.model_validate_json(raw)
-    if d.confidence < 0.4:
+    # Only route to local (fast) at confidence >= 0.99
+    if d.confidence < 0.99:
         d.tier = "frontier"
-        d.review_required = True
-    elif d.confidence < 0.7:
-        d.tier = "smart"
-        d.review_required = True
     return d
 ```
 

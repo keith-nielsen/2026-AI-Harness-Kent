@@ -29,18 +29,20 @@ class RouteDecision:
 
 
 ROUTER_SYSTEM = """Classify the task. Respond ONLY with JSON:
-{"tier":"fast"|"smart"|"frontier",
- "review_required":true|false,
+{"tier":"fast"|"frontier",
  "confidence":0.0-1.0,
- "escalation_reason":"...or empty"}
+ "reason":""}
 
 Rules:
-- Rote formatting/extraction/translation → fast, review=false
-- Code, planning, reasoning, multi-step → smart, review=true
-- Exceeds local capability → frontier, review=true
-- Confidence < 0.7 → smart, review=true
-- Confidence < 0.4 → frontier, review=true
-- When unsure, default smart + review=true"""
+- "fast" means: this is a PURELY MECHANICAL task requiring zero
+  reasoning. Examples: formatting, extraction, transformation,
+  classification, template filling, grammar correction, data
+  cleaning, simple summarization, structured output conversion.
+- "frontier" means: ANYTHING else — code generation, planning,
+  analysis, creative writing, domain expertise, multi-step logic,
+  problem-solving, debugging, tool orchestration, context >4K.
+- Only choose "fast" if you are 100% certain. When in doubt,
+  choose "frontier"."""
 
 
 def route(task_description: str, api_key: str) -> RouteDecision:
@@ -73,12 +75,9 @@ def route(task_description: str, api_key: str) -> RouteDecision:
     review = bool(data.get("review_required", True))
     reason = data.get("escalation_reason", "")
 
-    # Apply confidence floor rules
-    if confidence < 0.4:
+    # Apply confidence floor — only route to fast at >= 0.99
+    if confidence < 0.99:
         tier = "frontier"
-        review = True
-    elif confidence < 0.7:
-        tier = "smart"
         review = True
 
     original_tier = tier

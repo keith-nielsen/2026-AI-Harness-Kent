@@ -39,7 +39,7 @@ model_list:
   #     metadata:
   #       routing_tier: "primary"
 
-  # --- T3 Frontier (primary: DeepSeek, fallback: Opus) ---
+  # --- T3 Frontier (primary: DeepSeek)
   - model_name: "frontier"
     litellm_params:
       model: "deepseek/deepseek-v4-pro"
@@ -47,14 +47,7 @@ model_list:
     model_info:
       metadata:
         routing_tier: "primary"
-
-  - model_name: "frontier"
-    litellm_params:
-      model: "anthropic/claude-opus-4-7"
-      api_key: "os.environ/ANTHROPIC_API_KEY"
-    model_info:
-      metadata:
-        routing_tier: "fallback"
+  # No Opus 4.7 fallback (key not available)
 
 router_settings:
   routing_strategy: "simple-shuffle"

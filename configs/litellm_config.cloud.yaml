@@ -49,14 +49,7 @@ model_list:
       metadata:
         routing_tier: "primary"
 
-  # Fallback to Pro if Flash is down or overloaded
-  - model_name: "frontier"
-    litellm_params:
-      model: "deepseek/deepseek-v4-pro"
-      api_key: "os.environ/DEEPSEEK_API_KEY"
-    model_info:
-      metadata:
-        routing_tier: "fallback"
+  # No Opus 4.7 fallback (key not available)
 
 router_settings:
   routing_strategy: "simple-shuffle"
