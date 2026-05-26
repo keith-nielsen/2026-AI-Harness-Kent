@@ -3,7 +3,7 @@
 #
 # Architecture:
 #   Router  → Qwen2.5-0.5B (CPU via Ollama)
-#   Fast    → Qwen2.5-7B (local GPU via TabbyAPI, mechanical tasks only)
+#   Fast    → Qwen2.5-7B Q4_K_M (local GPU via Ollama, mechanical tasks only)
 #   Smart   → DeepSeek V4 Flash (cloud, routine reasoning)
 #   Frontier→ DeepSeek V4 Pro (cloud, hard problems)
 #
@@ -18,16 +18,16 @@ model_list:
       model: "ollama/qwen2.5:0.5b"
       api_base: "http://localhost:11434"
 
-  # --- T1 Fast (local GPU — mechanical tasks only) ---
+  # --- T1 Fast (local GPU — mechanical tasks via Ollama) ---
   - model_name: "fast"
     litellm_params:
-      model: "openai/qwen2.5-7b-exl2"
-      api_base: "http://localhost:5000"
+      model: "ollama/qwen2.5:7b-instruct-q4_K_M"
+      api_base: "http://localhost:11434"
 
-  # --- T2 Smart (cloud — routine reasoning) ---
+  # --- T2 Smart (cloud — routine reasoning, free tier) ---
   - model_name: "smart"
     litellm_params:
-      model: "deepseek/deepseek-v4-flash"
+      model: "deepseek/deepseek-v4-flash:free"
       api_key: "os.environ/DEEPSEEK_API_KEY"
 
   # --- T3 Frontier (cloud — hard problems) ---
