@@ -1,0 +1,11 @@
+[Unit]
+Description=Kent: review Gent learnings and relay escalations (schedule)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+Persistent=true
+RandomizedDelaySec=10
+
+[Install]
+WantedBy=timers.target

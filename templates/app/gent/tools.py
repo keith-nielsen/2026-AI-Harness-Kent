@@ -1,180 +1,119 @@
-"""
-Kent — Gent Custom Tools
+"""Gent tools for CrewAI workers. All network access goes through the egress
+proxy (HTTP(S)_PROXY -> Squid on the Kent bridge; the container network itself is
+internal-only). File and command tools are confined to /data/workspace."""
+from __future__ import annotations
 
-Proxy-aware tool wrappers for CrewAI workers. These replace CrewAI's
-bundled tools to ensure all external access flows through our egress
-proxy and is visible in telemetry.
-
-All HTTP requests use the container's HTTP_PROXY/HTTPS_PROXY env vars
-(set in docker-compose.gent.yml → Squid on 172.30.0.1:3128).
-
-Tools are CrewAI-compatible: decorated with @tool or subclassing BaseTool.
-"""
-
+import html
 import os
-from typing import Optional
+import re
+import subprocess
+from pathlib import Path
 
 import requests
-import urllib3
 from crewai.tools import tool
 
-# Suppress SSL warnings through Squid CONNECT tunnel
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+WORKSPACE = Path(os.environ.get("GENT_WORKSPACE", "/data/workspace"))
+TIMEOUT = 30
+UA = "Kent-Gent/1.0 (research agent)"
 
-# Proxy config is inherited from container environment.
-# requests respects HTTP_PROXY/HTTPS_PROXY automatically.
-REQUEST_TIMEOUT = 30
+
+def _in_workspace(path: str) -> Path:
+    p = (WORKSPACE / path.lstrip("/").removeprefix("data/workspace/")).resolve()
+    if p != WORKSPACE and WORKSPACE not in p.parents:
+        raise ValueError("path must be inside /data/workspace")
+    return p
+
+
+def _text(html_src: str, limit: int = 6000) -> str:
+    t = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html_src)
+    t = re.sub(r"(?s)<[^>]+>", " ", t)
+    t = re.sub(r"\s+", " ", html.unescape(t)).strip()
+    return t[:limit] + (" [truncated]" if len(t) > limit else "")
 
 
 @tool("Web Search")
 def web_search(query: str) -> str:
-    """Search the web for information. Returns ranked results with titles,
-    URLs, and snippets.
-
-    Use this when you need current information, facts, or data that
-    may not be in your training data.
-    """
-    import re as _re
-    import time as _time
-    # Retry once on transient SSL/proxy errors
-    for attempt in range(2):
-        try:
-            resp = requests.get(
-                "https://html.duckduckgo.com/html/",
-                params={"q": query},
-                timeout=REQUEST_TIMEOUT,
-                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"},
-                verify=False,
-            )
-            resp.raise_for_status()
-            break  # success
-        except requests.exceptions.SSLError:
-            if attempt == 0:
-                _time.sleep(1)
-                continue
-            return "Search failed: SSL handshake error (intermittent proxy tunnel issue)"
-
-    html = resp.text
-
-    # Split on individual result blocks
-    blocks = _re.findall(
-        r'<div class="result[^"]* results_links[^"]* web-result[^"]*">(.*?)</div>\s*</div>\s*</div>',
-        html, _re.DOTALL,
-    )
-
+    """Search the web. Returns up to 8 results as title, URL and snippet."""
+    try:
+        r = requests.get("https://html.duckduckgo.com/html/", params={"q": query},
+                         headers={"User-Agent": UA}, timeout=TIMEOUT)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        return f"search failed: {e}"
     results = []
-    for block in blocks[:8]:
-        # Title
-        title_match = _re.search(
-            r'class="result__a"[^>]*>(.*?)</a>', block, _re.DOTALL,
-        )
-        title = _re.sub(r"<[^>]+>", "", title_match.group(1)).strip() if title_match else ""
-
-        # Display URL
-        url_match = _re.search(
-            r'class="result__url"[^>]*>(.*?)</a>', block, _re.DOTALL,
-        )
-        url = _re.sub(r"<[^>]+>", "", url_match.group(1)).strip() if url_match else ""
-
-        # Snippet
-        snippet_match = _re.search(
-            r'class="result__snippet"[^>]*>(.*?)</a>', block, _re.DOTALL,
-        )
-        snippet = _re.sub(r"<[^>]+>", "", snippet_match.group(1)).strip() if snippet_match else ""
-
-        if title or snippet:
-            results.append(f"[{title}]({url})\n{snippet}")
-
-    if results:
-        return "\n\n---\n\n".join(results)
-    return f"No results found for: {query}"
+    for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</a>',
+                         r.text, re.S):
+        url, title, snip = m.group(1), _text(m.group(2), 200), _text(m.group(3), 400)
+        results.append(f"- {title}\n  {url}\n  {snip}")
+        if len(results) == 8:
+            break
+    return "\n".join(results) or f"no results for: {query}"
 
 
 @tool("Read Web Page")
 def read_web_page(url: str) -> str:
-    """Fetch and read the text content of a web page.
-
-    Use this to read articles, documentation, or any public web page.
-    Only GET requests are allowed through the egress proxy.
-    """
+    """Fetch a public web page (GET only) and return its readable text."""
+    if not url.startswith(("https://", "http://")):
+        return "only http(s) URLs are allowed"
     try:
-        resp = requests.get(
-            url,
-            timeout=REQUEST_TIMEOUT,
-            headers={"User-Agent": "Kent-Gent/1.0"},
-        )
-        resp.raise_for_status()
-
-        # Basic text extraction — strip HTML tags
-        text = resp.text
-        # Simple tag stripping; for production, use BeautifulSoup
-        import re
-        text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        # Truncate to avoid blowing up context
-        max_chars = 10000
-        if len(text) > max_chars:
-            text = text[:max_chars] + "\n\n[Truncated]"
-
-        return text
-
+        r = requests.get(url, headers={"User-Agent": UA}, timeout=TIMEOUT)
+        r.raise_for_status()
     except requests.RequestException as e:
-        return f"Failed to fetch {url}: {e}"
+        return f"fetch failed: {e}"
+    return _text(r.text) if "html" in r.headers.get("content-type", "") else r.text[:12000]
 
 
 @tool("Read File")
-def read_file(filepath: str) -> str:
-    """Read the contents of a file in the project data directory.
-
-    Files are located under /data/. Provide a path relative to /data/
-    or an absolute path starting with /data/.
-    """
-    if not filepath.startswith("/data/"):
-        filepath = f"/data/{filepath.lstrip('/')}"
-
-    # Security: prevent path traversal
-    resolved = os.path.realpath(filepath)
-    if not resolved.startswith("/data/"):
-        return "Error: Access denied — path must be within /data/"
-
+def read_file(path: str) -> str:
+    """Read a text file from the project workspace (/data/workspace)."""
     try:
-        with open(resolved, "r") as f:
-            content = f.read()
-        if len(content) > 50000:
-            content = content[:50000] + "\n\n[Truncated]"
-        return content
-    except FileNotFoundError:
-        return f"File not found: {filepath}"
-    except Exception as e:
-        return f"Error reading {filepath}: {e}"
+        return _in_workspace(path).read_text()[:50000]
+    except (OSError, ValueError) as e:
+        return f"error: {e}"
 
 
 @tool("Write File")
-def write_file(filepath: str, content: str) -> str:
-    """Write content to a file in the project data directory.
-
-    Files are written under /data/. Provide a path relative to /data/
-    or an absolute path starting with /data/.
-    """
-    if not filepath.startswith("/data/"):
-        filepath = f"/data/{filepath.lstrip('/')}"
-
-    resolved = os.path.realpath(filepath)
-    if not resolved.startswith("/data/"):
-        return "Error: Access denied — path must be within /data/"
-
+def write_file(path: str, content: str) -> str:
+    """Write a text file into the project workspace (/data/workspace). Creates folders.
+    Files starting with a #! line are made executable."""
     try:
-        os.makedirs(os.path.dirname(resolved), exist_ok=True)
-        with open(resolved, "w") as f:
-            f.write(content)
-        return f"Written {len(content)} chars to {filepath}"
-    except Exception as e:
-        return f"Error writing {filepath}: {e}"
+        p = _in_workspace(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        if content.startswith("#!"):
+            p.chmod(0o750)
+        return f"wrote {len(content)} chars to {p.relative_to(WORKSPACE)}"
+    except (OSError, ValueError) as e:
+        return f"error: {e}"
 
 
-def get_default_tools() -> list:
-    """Return the standard tool set for Gent workers."""
-    return [web_search, read_web_page, read_file, write_file]
+@tool("List Files")
+def list_files(subdir: str = "") -> str:
+    """List files in the project workspace."""
+    try:
+        base = _in_workspace(subdir or ".")
+        return "\n".join(str(p.relative_to(WORKSPACE)) for p in sorted(base.rglob("*")) if p.is_file())[:8000] or "(empty)"
+    except (OSError, ValueError) as e:
+        return f"error: {e}"
+
+
+@tool("Run Script")
+def run_script(path: str, args: str = "") -> str:
+    """Run a Python (.py) or shell (.sh) script from the workspace with a 120s timeout.
+    Network access only through the egress proxy. Returns exit code and output."""
+    try:
+        p = _in_workspace(path)
+    except ValueError as e:
+        return f"error: {e}"
+    if not p.is_file() or p.suffix not in (".py", ".sh"):
+        return "error: only existing .py or .sh files in the workspace can be run"
+    cmd = ["python3", str(p)] if p.suffix == ".py" else ["bash", str(p)]
+    try:
+        r = subprocess.run(cmd + args.split(), cwd=WORKSPACE, capture_output=True, text=True, timeout=120)
+        return f"exit={r.returncode}\n--- stdout ---\n{r.stdout[-3000:]}\n--- stderr ---\n{r.stderr[-2000:]}"
+    except subprocess.TimeoutExpired:
+        return "error: timed out after 120s"
+
+
+def all_tools() -> list:
+    return [web_search, read_web_page, read_file, write_file, list_files, run_script]

@@ -14,7 +14,7 @@ log "Starting E2E validation..."
 # ─── 8.1 Verify All Services ─────────────────────────────────────────────────
 log "Checking all services are running..."
 
-for svc in ollama litellm gitea grafana-server prometheus loki promtail squid; do
+for svc in litellm gitea grafana-server prometheus loki promtail squid; do
     test_gate "Service ${svc} active" "systemctl is-active --quiet '$svc' 2>/dev/null || systemctl is-active --quiet '${svc}.service'"
 done
 

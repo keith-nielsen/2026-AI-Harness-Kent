@@ -34,16 +34,15 @@ LOGS_DIR="${KENT_HOME}/logs"
 # Other service home directories
 LITELLM_HOME="/home/litellm"
 GITEA_HOME="/home/gitea"
-OLLAMA_HOME="/var/lib/ollama"
 
 # PostgreSQL (required by LiteLLM only)
 POSTGRES_PORT=5432
 LITELLM_PG_DB="litellm"
 LITELLM_PG_USER="litellm"
 
-# Ollama
-OLLAMA_PORT=11434
-OLLAMA_URL="http://127.0.0.1:${OLLAMA_PORT}"
+# Local inference: a user-managed llama.cpp server (prerequisite, not installed
+# by Kent). Override with KENT_LOCAL_LLM_URL if it listens elsewhere.
+LOCAL_LLM_URL="${KENT_LOCAL_LLM_URL:-http://127.0.0.1:8080}"
 
 # Config directories
 LITELLM_CONF="/etc/litellm"
@@ -74,7 +73,7 @@ HERMES_REPO="https://github.com/NousResearch/hermes-agent.git"
 HERMES_VERSION="v2026.5.16"
 
 export KENT_ROOT KENT_HOME LITELLM_HOME SECRETS_DIR STACKS_DIR LOGS_DIR KENT_DB
-export GITEA_HOME OLLAMA_HOME OLLAMA_PORT OLLAMA_URL LITELLM_CONF
+export GITEA_HOME LOCAL_LLM_URL LITELLM_CONF
 export GATEWAY_PORT GITEA_PORT GRAFANA_PORT PROMETHEUS_PORT LOKI_PORT SQUID_PORT
 export DOCKER_SUBNET DOCKER_GATEWAY DOCKER_NETWORK
 
@@ -111,20 +110,18 @@ detect_distro() {
         case "$ID" in
             ubuntu|linuxmint|pop)
                 PKG_MGR="apt"
-                FW_MGR="ufw"
                 DISTRO_FAMILY="debian"
                 ;;
             fedora|rhel|centos|rocky|alma)
                 PKG_MGR="dnf"
-                FW_MGR="firewalld"
                 DISTRO_FAMILY="rhel"
                 ;;
             *)
                 die "Unsupported distro: $ID"
                 ;;
         esac
-        export PKG_MGR FW_MGR DISTRO_FAMILY
-        log "Detected: $PRETTY_NAME (family=$DISTRO_FAMILY, pkg=$PKG_MGR, fw=$FW_MGR)"
+        export PKG_MGR DISTRO_FAMILY
+        log "Detected: $PRETTY_NAME (family=$DISTRO_FAMILY, pkg=$PKG_MGR)"
     else
         die "Cannot detect distro — /etc/os-release missing"
     fi

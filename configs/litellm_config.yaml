@@ -1,60 +1,134 @@
 # /etc/litellm/config.yaml
 # Kent — Inference Gateway Configuration (Production)
 #
-# All inference consumers hit localhost:4000 with a logical model name.
+# All inference consumers hit localhost:4000 with a logical model name. Kent
+# calls "auto": the router tier classifies each request as fast / smart /
+# frontier and LiteLLM forwards it to that tier.
 # This file maps logical names to physical endpoints.
 # Swap models or add cluster nodes here — zero application code changes.
+#
+# Local tiers go to a user-managed llama.cpp server (llama-server) exposing its
+# OpenAI-compatible API. Kent does not install or start it. llama-server needs
+# no API key, but LiteLLM's openai/ provider requires a non-empty value.
 #
 # DATABASE_URL is read from the environment (set via gateway.env).
 # model_info uses 'metadata' for Kent-specific fields (LiteLLM validates
 # the 'tier' field as 'free'|'paid' only).
 
 model_list:
-  # --- T0 Router ---
+  # --- Classify-then-route entry point ---
+  - model_name: "auto"
+    litellm_params:
+      model: "auto_router/complexity_router"
+      complexity_router_config:
+        classifier_type: "llm"
+        classifier_llm_config:
+          model: "router"
+          # Local model on the 2060: allow for prefill of the rubric + request.
+          timeout_ms: 15000
+        tier_definitions:
+          - name: "fast"
+            description: >-
+              Routine, mechanical requests with an obvious answer: formatting,
+              extraction, short factual lookups, simple rewrites, running a
+              single well-specified command, summarising short text.
+          - name: "smart"
+            description: >-
+              Ordinary engineering and knowledge work that needs some reasoning:
+              writing or editing code, debugging with clear symptoms, multi-step
+              but well-scoped tasks, explanations that need judgement.
+          - name: "frontier"
+            description: >-
+              Hard or high-stakes work: open-ended design and architecture,
+              subtle debugging, novel problems, long multi-part reasoning, or
+              anything where a wrong answer is costly.
+        tiers:
+          fast: "fast"
+          smart: "smart"
+          frontier: "frontier"
+        # Unclassifiable or failed classification goes to the most capable
+        # tier ("when in doubt, escalate").
+        fallback_tier: "frontier"
+
+  # --- T0 Router (local; shares the llama.cpp server until a dedicated router model runs) ---
   - model_name: "router"
     litellm_params:
-      model: "ollama/gemma4:4b-q8_0"
-      api_base: "http://localhost:11434"
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
 
-  # --- T1 Fast ---
+  # --- T1 Fast (local — routine commands) ---
   - model_name: "fast"
     litellm_params:
-      model: "ollama/gemma4:26b-a4b-q8_0"
-      api_base: "http://localhost:11434"
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
 
-  # --- T2 Smart (primary: local) ---
+  # --- T2 Smart (cloud — same model as frontier until they are differentiated) ---
   - model_name: "smart"
     litellm_params:
-      model: "ollama/qwen3.6:27b-nothink"
-      api_base: "http://localhost:11434"
+      model: "anthropic/claude-opus-5-5"
+      api_key: "os.environ/ANTHROPIC_API_KEY"
+      # Seconds before a hung cloud call gives up and falls back to fast.
+      # Set in /etc/kent/litellm/litellm.env (FALLBACK_TIMEOUT).
+      timeout: "os.environ/FALLBACK_TIMEOUT"
+      stream_timeout: "os.environ/FALLBACK_TIMEOUT"
     model_info:
       metadata:
         routing_tier: "primary"
-  # Phase 2 cluster: add cluster endpoint as primary, local becomes fallback
-  # - model_name: "smart"
-  #   litellm_params:
-  #     model: "ollama/qwen3.6:27b-nothink"
-  #     api_base: "http://<cluster-ip>:11434"
-  #   model_info:
-  #     metadata:
-  #       routing_tier: "primary"
 
-  # --- T3 Frontier (primary: DeepSeek)
+  # --- T3 Frontier (cloud) ---
   - model_name: "frontier"
     litellm_params:
-      model: "deepseek/deepseek-v4-pro"
-      api_key: "os.environ/DEEPSEEK_API_KEY"
+      model: "anthropic/claude-opus-5-5"
+      api_key: "os.environ/ANTHROPIC_API_KEY"
+      # Seconds before a hung cloud call gives up and falls back to fast.
+      # Set in /etc/kent/litellm/litellm.env (FALLBACK_TIMEOUT).
+      timeout: "os.environ/FALLBACK_TIMEOUT"
+      stream_timeout: "os.environ/FALLBACK_TIMEOUT"
     model_info:
       metadata:
         routing_tier: "primary"
-  # No Opus 4.7 fallback (key not available)
 
 router_settings:
   routing_strategy: "simple-shuffle"
   num_retries: 1
-  timeout: 120
+  # If a call fails, answer from the local fast tier instead of erroring.
+  # Fallbacks match the model name the caller asked for, so "auto" needs its
+  # own entry (otherwise a request routed to a failing tier returns 500).
+  fallbacks:
+    - smart: ["fast"]
+    - frontier: ["fast"]
+    - auto: ["fast"]
+  # Fall back immediately on timeouts and auth/bad-request errors; retry
+  # once only where a retry can help (rate limits, provider 5xx). Without
+  # this, num_retries multiplies the time before fallback.
+  retry_policy:
+    TimeoutErrorRetries: 0
+    AuthenticationErrorRetries: 0
+    BadRequestErrorRetries: 0
+    ContentPolicyViolationErrorRetries: 0
+    RateLimitErrorRetries: 1
+    InternalServerErrorRetries: 1
+  timeout: 600
 
+# Identity-based access, no database: kent_gateway (install/services/litellm/
+# kent_gateway.py) maps each key to an identity (operator / kent / gent) and
+# the tiers it may call, and logs every call and every denial as JSON to stdout.
+# Both LiteLLM switches below are required for LiteLLM to enforce the model
+# list; kent_gateway also enforces it itself.
 general_settings:
-  master_key: "os.environ/LITELLM_ADMIN_KEY"
-  database_url: "os.environ/DATABASE_URL"
-  enable_key_tracking: true
+  custom_auth: "kent_gateway.user_api_key_auth"
+  custom_auth_run_common_checks: true
+
+litellm_settings:
+  enable_post_custom_auth_checks: true
+  # activity_logger: per-call JSON to journald; prometheus: /metrics/ for Prometheus
+  # (scraped with the "metrics" identity key).
+  callbacks: ["kent_gateway.activity_logger", "prometheus"]

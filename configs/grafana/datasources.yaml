@@ -1,0 +1,16 @@
+# /etc/grafana/provisioning/datasources/kent.yaml — installed by install/services/grafana
+apiVersion: 1
+datasources:
+  - name: Prometheus (Kent)
+    uid: kent-prometheus
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:9090
+    isDefault: true
+    editable: false
+  - name: Loki (Kent)
+    uid: kent-loki
+    type: loki
+    access: proxy
+    url: http://127.0.0.1:3100
+    editable: false

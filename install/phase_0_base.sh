@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Kent — Phase 0: OS Base
-# Installs: GPU drivers (ROCm or CUDA), Python 3.12, Docker, system users/groups
+# Installs: Python 3.12 (distro package), Docker, system users/groups
+# GPU drivers and llama.cpp are user-managed prerequisites and are not installed here.
 # =============================================================================
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -23,45 +24,22 @@ log "Operator validated: $ENTERPRISE_USER (uid=$(id -u "$ENTERPRISE_USER"), home
 log "Installing base packages..."
 pkg_update
 pkg_install curl wget git jq sqlite3 build-essential lm-sensors \
-            ca-certificates gnupg software-properties-common \
+            ca-certificates gnupg \
             logrotate rsync e2fsprogs attr
 
 # ─── 0.3 Python 3.12 ────────────────────────────────────────────────────────
+# Distro package only (native on Ubuntu 24.04 / Mint 22). No third-party PPAs.
 log "Installing Python 3.12..."
 if [[ "$DISTRO_FAMILY" == "debian" ]]; then
-    add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
-    pkg_update
     pkg_install python3.12 python3.12-venv python3.12-dev python3-pip
 else
     pkg_install python3.12 python3.12-devel python3-pip
 fi
 test_gate "Python 3.12 available" "python3.12 --version"
 
-# ─── 0.4 GPU Drivers ────────────────────────────────────────────────────────
-if [[ "$DEV_MODE" -eq 1 ]] && [[ "$GPU_VENDOR" == "nvidia" ]]; then
-    log "Dev mode: Skipping ROCm, using existing NVIDIA/CUDA drivers."
-    test_gate "nvidia-smi responds" "nvidia-smi"
-elif [[ "$GPU_VENDOR" == "amd" ]]; then
-    log "Installing ROCm for AMD GPU..."
-    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
-        mkdir -p /etc/apt/keyrings
-        wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | \
-            gpg --dearmor --yes -o /etc/apt/keyrings/rocm.gpg
-        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] \
-              https://repo.radeon.com/rocm/apt/latest noble main" \
-              > /etc/apt/sources.list.d/rocm.list
-        pkg_update
-        pkg_install rocm-hip-runtime rocm-smi-lib
-    else
-        pkg_install rocm-hip-runtime rocm-smi
-    fi
-    test_gate "rocm-smi responds" "rocm-smi --showid"
-elif [[ "$GPU_VENDOR" == "nvidia" ]]; then
-    log "NVIDIA GPU detected (production). Ensure CUDA drivers are installed."
-    test_gate "nvidia-smi responds" "nvidia-smi"
-else
-    warn "No GPU detected. Inference will be CPU-only (very slow)."
-fi
+# ─── 0.4 GPU (informational only) ───────────────────────────────────────────
+# Drivers belong to the user's llama.cpp setup; Kent does not install them.
+log "GPU vendor detected: ${GPU_VENDOR} (drivers are user-managed)"
 
 # ─── 0.5 Docker ─────────────────────────────────────────────────────────────
 log "Installing Docker..."
@@ -96,17 +74,11 @@ log "Creating system users and groups..."
 
 # Functional groups
 ensure_group "agentic-logs"
-ensure_group "ollama"
 
 # System users
 ensure_system_user "kent"     "$KENT_HOME"
-ensure_system_user "ollama"   "$OLLAMA_HOME"
 ensure_system_user "litellm"  "$LITELLM_HOME"
 ensure_system_user "gitea"    "$GITEA_HOME"
-
-# Group memberships — system users
-add_to_group "kent"     "ollama"
-add_to_group "litellm"  "ollama"
 
 # Operator group memberships
 add_to_group "$ENTERPRISE_USER" "docker"
@@ -160,8 +132,7 @@ STACKS_DIR=${STACKS_DIR}
 LOGS_DIR=${LOGS_DIR}
 KENT_DB=${KENT_DB}
 GITEA_HOME=${GITEA_HOME}
-OLLAMA_PORT=${OLLAMA_PORT}
-OLLAMA_URL=${OLLAMA_URL}
+LOCAL_LLM_URL=${LOCAL_LLM_URL}
 GATEWAY_PORT=${GATEWAY_PORT}
 GITEA_PORT=${GITEA_PORT}
 GRAFANA_PORT=${GRAFANA_PORT}
@@ -177,7 +148,6 @@ log "Runtime config written: $KENT_CONF"
 test_gate "Python 3.12" "python3.12 -c \"import sys; assert sys.version_info[:2] == (3,12)\""
 test_gate "Docker running" "systemctl is-active --quiet docker"
 test_gate "kent user exists" "id kent"
-test_gate "ollama group" "getent group ollama"
 test_gate "agentic-logs group" "getent group agentic-logs"
 test_gate "Operator in docker" "id -nG '${ENTERPRISE_USER}' | grep -qw docker"
 test_gate "Secrets dir 0700" "[[ \$(stat -c %a '${SECRETS_DIR}') == '700' ]]"

@@ -5,18 +5,15 @@
 # Run this before a clean reinstall.
 #
 # Usage: sudo ./resetinstall.sh [OPTIONS]
-#   --include-ollama   Also remove Ollama (binary, models, user)
 #   --full-purge       Remove ALL packages installed by Kent (PostgreSQL,
 #                      Grafana, Squid, AIDE, Prometheus, Loki, etc.)
 # =============================================================================
 set -uo pipefail
 
-INCLUDE_OLLAMA=0
 FULL_PURGE=0
 
 for arg in "$@"; do
     case "$arg" in
-        --include-ollama) INCLUDE_OLLAMA=1 ;;
         --full-purge)     FULL_PURGE=1 ;;
     esac
 done
@@ -39,7 +36,6 @@ fi
 echo "━━━ Kent Reset ━━━"
 echo ""
 echo "This will destroy ALL Kent data, databases, secrets, and service configs."
-echo "  Ollama:     $([ $INCLUDE_OLLAMA -eq 1 ] && echo 'WILL BE REMOVED' || echo 'preserved (use --include-ollama)')"
 echo "  Full purge: $([ $FULL_PURGE -eq 1 ] && echo 'YES — all packages will be removed' || echo 'no (use --full-purge)')"
 echo ""
 read -p "Type YES to confirm: " CONFIRM
@@ -57,11 +53,6 @@ for svc in kent litellm gitea grafana-server prometheus loki promtail squid node
     systemctl disable "$svc" 2>/dev/null || true
 done
 
-if [[ $INCLUDE_OLLAMA -eq 1 ]]; then
-    systemctl stop ollama 2>/dev/null || true
-    systemctl disable ollama 2>/dev/null || true
-fi
-
 # ─── Remove Systemd Units ────────────────────────────────────────────────────
 echo "[reset] Removing systemd units..."
 rm -f /etc/systemd/system/kent.service
@@ -72,11 +63,6 @@ rm -f /etc/systemd/system/prometheus.service
 rm -f /etc/systemd/system/loki.service
 rm -f /etc/systemd/system/promtail.service
 
-if [[ $INCLUDE_OLLAMA -eq 1 ]]; then
-    rm -f /etc/systemd/system/ollama.service
-    rm -rf /etc/systemd/system/ollama.service.d
-fi
-
 systemctl daemon-reload
 
 # ─── Remove Users ─────────────────────────────────────────────────────────────
@@ -85,10 +71,6 @@ for user in kent litellm gitea node_exporter promtail prometheus loki; do
     userdel -r "$user" 2>/dev/null || true
 done
 
-if [[ $INCLUDE_OLLAMA -eq 1 ]]; then
-    userdel -r ollama 2>/dev/null || true
-fi
-
 # ─── Remove Data Directories ─────────────────────────────────────────────────
 echo "[reset] Removing data directories..."
 rm -rf /home/kent
@@ -96,10 +78,6 @@ rm -rf /home/litellm
 rm -rf /home/gitea
 rm -rf /var/lib/prometheus
 rm -rf /var/lib/loki
-
-if [[ $INCLUDE_OLLAMA -eq 1 ]]; then
-    rm -rf /var/lib/ollama
-fi
 
 # ─── Remove Config Directories ───────────────────────────────────────────────
 echo "[reset] Removing config directories..."
@@ -144,10 +122,6 @@ rm -f /usr/local/bin/node_exporter
 rm -f /usr/local/bin/prometheus /usr/local/bin/promtool
 rm -f /usr/local/bin/loki
 rm -f /usr/local/bin/promtail
-
-if [[ $INCLUDE_OLLAMA -eq 1 ]]; then
-    rm -f /usr/local/bin/ollama
-fi
 
 # ─── Remove Install State ────────────────────────────────────────────────────
 echo "[reset] Removing install state..."
@@ -228,9 +202,6 @@ else
     echo "  - Grafana package (only Kent datasources removed)"
     echo "  - Squid package"
     echo "  - AIDE package"
-fi
-if [[ $INCLUDE_OLLAMA -eq 0 ]]; then
-    echo "  - Ollama binary, models, and user config (use --include-ollama)"
 fi
 echo "  - Docker engine"
 echo ""

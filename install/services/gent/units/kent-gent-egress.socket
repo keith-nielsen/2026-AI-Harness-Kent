@@ -1,0 +1,11 @@
+[Unit]
+Description=Kent Gent bridge -> egress proxy (172.30.0.1:3129)
+After=docker.service
+
+[Socket]
+ListenStream=172.30.0.1:3129
+FreeBind=yes
+NoDelay=yes
+
+[Install]
+WantedBy=sockets.target

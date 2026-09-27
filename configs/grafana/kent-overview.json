@@ -1,0 +1,209 @@
+{
+  "uid": "kent-overview",
+  "title": "Kent overview",
+  "tags": [
+    "kent"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Gateway calls by identity (5m)",
+      "datasource": {
+        "type": "loki",
+        "uid": "kent-loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (identity) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"}[5m]))",
+          "datasource": {
+            "type": "loki",
+            "uid": "kent-loki"
+          },
+          "legendFormat": "{{identity}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Access denials by identity (5m)",
+      "datasource": {
+        "type": "loki",
+        "uid": "kent-loki"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (identity) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"access_denied\"}[5m]))",
+          "datasource": {
+            "type": "loki",
+            "uid": "kent-loki"
+          },
+          "legendFormat": "{{identity}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Router decisions: routed tier (1h)",
+      "datasource": {
+        "type": "loki",
+        "uid": "kent-loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (routed_tier) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | routed_tier != \"\" [1h]))",
+          "datasource": {
+            "type": "loki",
+            "uid": "kent-loki"
+          },
+          "legendFormat": "{{routed_tier}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Scrape targets up",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kent-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kent-prometheus"
+          },
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Host CPU busy",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kent-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kent-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Host memory available",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kent-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kent-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Gateway log (latest)",
+      "datasource": {
+        "type": "loki",
+        "uid": "kent-loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{unit=\"kent-litellm.service\", kent_event=~\".+\"}",
+          "datasource": {
+            "type": "loki",
+            "uid": "kent-loki"
+          }
+        }
+      ]
+    }
+  ]
+}

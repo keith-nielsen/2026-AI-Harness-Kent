@@ -1,0 +1,20 @@
+#!/bin/sh
+# Kent — LiteLLM start wrapper (installed to /opt/kent-litellm/libexec/).
+# LiteLLM reads upstream provider keys only from environment variables, so this
+# exports the Anthropic credential for the gateway process alone and then execs it.
+set -eu
+
+cred="${CREDENTIALS_DIRECTORY:?not started by systemd with LoadCredential}"
+
+# Identity keys are read by kent_gateway directly from $CREDENTIALS_DIRECTORY.
+
+# The Anthropic key is optional until smart/frontier point at Claude.
+if [ -s "$cred/anthropic_api_key" ]; then
+    ANTHROPIC_API_KEY="$(cat "$cred/anthropic_api_key")"
+    export ANTHROPIC_API_KEY
+fi
+
+exec /opt/kent-litellm/bin/litellm \
+    --config /etc/kent/litellm/config.yaml \
+    --host 127.0.0.1 --port 4000 \
+    --telemetry False

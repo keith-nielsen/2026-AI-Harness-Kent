@@ -91,8 +91,7 @@ log "Creating LiteLLM systemd unit..."
 cat > /etc/systemd/system/litellm.service << EOF
 [Unit]
 Description=LiteLLM Inference Gateway
-After=ollama.service postgresql.service
-Requires=ollama.service
+After=postgresql.service
 Wants=postgresql.service
 
 [Service]

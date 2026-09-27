@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Kent — Phase 4: Security
-# Installs: Squid egress proxy, Docker bridge network, AIDE, firewall rules
+# Installs: Squid egress proxy, Docker bridge network, AIDE, systemd-oomd
+# Firewall configuration is deliberately out of scope (a later hardening step).
 # =============================================================================
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -53,7 +54,6 @@ ${KENT_DB}            CONTENT_EX
 /etc/systemd/system   CONTENT_EX
 ${LITELLM_CONF}       CONTENT_EX
 /etc/squid            CONTENT_EX
-/usr/local/bin/ollama CONTENT_EX
 /usr/local/bin/gitea  CONTENT_EX
 EOF
 
@@ -70,43 +70,12 @@ if [[ ! -f "$HMAC_LOG" ]]; then
     log "  Created: $HMAC_LOG (append-only)"
 fi
 
-# ─── 4.5 Firewall ────────────────────────────────────────────────────────────
-log "Configuring firewall..."
-
-if [[ "$FW_MGR" == "ufw" ]]; then
-    pkg_install ufw
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw allow ssh
-    # All services localhost-only
-    for port in $GITEA_PORT $GRAFANA_PORT $GATEWAY_PORT $PROMETHEUS_PORT $LOKI_PORT $SQUID_PORT; do
-        ufw allow from 127.0.0.1 to any port "$port"
-    done
-    ufw --force enable
-    log "  UFW configured and enabled."
-
-elif [[ "$FW_MGR" == "firewalld" ]]; then
-    pkg_install firewalld
-    systemctl enable --now firewalld
-    firewall-cmd --set-default-zone=drop
-    firewall-cmd --permanent --add-service=ssh
-    for port in $GITEA_PORT $GRAFANA_PORT $GATEWAY_PORT $PROMETHEUS_PORT $LOKI_PORT $SQUID_PORT; do
-        firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"127.0.0.1\" port port=\"${port}\" protocol=\"tcp\" accept"
-    done
-    firewall-cmd --reload
-    log "  firewalld configured."
-fi
-
-# ─── 4.6 systemd-oomd (Memory Pressure Guard) ────────────────────────────────
+# ─── 4.5 systemd-oomd (Memory Pressure Guard) ────────────────────────────────
 log "Installing systemd-oomd..."
 pkg_install systemd-oomd
 
 # Create drop-in configs for each Kent service to opt into OOMD management
-cat > /etc/systemd/system/ollama.service.d/oomd.conf << 'EOF'
-[Service]
-ManagedOOMSwap=kill
-ManagedOOMMemoryPressure=kill
-EOF
+mkdir -p /etc/systemd/system/{litellm,kent,squid}.service.d
 
 cat > /etc/systemd/system/litellm.service.d/oomd.conf << 'EOF'
 [Service]
@@ -130,7 +99,7 @@ EOF
 # Gent containers are managed via Docker mem_limit, not systemd-oomd.
 
 enable_and_start systemd-oomd
-log "  systemd-oomd enabled with ManagedOOM=kill on ollama, litellm, kent, squid."
+log "  systemd-oomd enabled with ManagedOOM=kill on litellm, kent, squid."
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 test_gate "Squid listening" "ss -tlnp | grep -q ':${SQUID_PORT}'"
@@ -148,6 +117,6 @@ log "  NOTE: POST blocking test deferred to Phase 8 (requires container on Docke
 
 test_gate "systemd-oomd running" "systemctl is-active --quiet systemd-oomd"
 test_gate "OOMD swap monitoring active" "busctl call org.freedesktop.oom1 /org/freedesktop/oom1 org.freedesktop.oom1.Manager GetSwapUsedLimit 2>/dev/null | head -1 | grep -q '90'"
-test_gate "Ollama OOMD drop-in exists" "test -f /etc/systemd/system/ollama.service.d/oomd.conf"
+test_gate "LiteLLM OOMD drop-in exists" "test -f /etc/systemd/system/litellm.service.d/oomd.conf"
 
 log "Phase 4 complete."

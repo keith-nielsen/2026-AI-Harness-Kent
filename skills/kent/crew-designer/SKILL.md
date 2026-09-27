@@ -193,3 +193,37 @@ After generation, verify:
 3. Task count matches the approved pipeline
 4. Process type matches the approved design
 5. No placeholder text remains (no `<fill in>` or `TODO` strings)
+
+
+## Spawning (kent-gent)
+
+After the operator approves the design, write three files into a new directory
+(e.g. `/tmp/kent-crew-staging/<short-name>/`) and spawn:
+
+`project.yaml`
+```yaml
+name: "Short project name"
+goal: "One or two sentences: the deliverable and who uses it"
+```
+
+`project.yaml` may add `limits: {max_iter: 6, max_tokens: 1500}` (defaults; keep tasks small — the local model is slow).
+
+`agents.yaml` — one entry per worker (key -> role, goal, backstory). Keep it to 2-4 agents.
+
+`tasks.yaml` — ordered; each task runs as its own crew step and sees earlier results:
+```yaml
+research:
+  agent: researcher                 # key from agents.yaml
+  description: "What to do, concretely. Name the files to write in /data/workspace."
+  expected_output: "What 'done' looks like"
+build:
+  agent: developer
+  description: "..."
+  expected_output: "..."
+  escalate: true                    # optional: ask Kent (frontier) before starting
+  question: "The precise expert question"   # optional, used with escalate
+```
+
+Then run: `kent-gent spawn --name "<name>" --project <dir>` and report the stack id.
+Follow progress with `kent-gent status <id>`; when it is complete run
+`kent-gent assess <id>` and summarise the assessment for the operator.

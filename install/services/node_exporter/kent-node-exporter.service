@@ -1,0 +1,45 @@
+# /etc/systemd/system/kent-node-exporter.service — installed by install/services/node_exporter
+[Unit]
+Description=Prometheus node_exporter host metrics (Kent)
+Documentation=https://github.com/prometheus/node_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=node_exporter
+Group=node_exporter
+ExecStart=/opt/kent-node-exporter/node_exporter --web.listen-address=127.0.0.1:9100
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening (reads host state: /proc, /sys, mount points incl. /home) ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# timex collector reads NTP sync state via adjtimex (not in @system-service).
+# Read-only here: with an empty capability set the kernel refuses clock changes
+# (they need CAP_SYS_TIME), so ProtectClock is intentionally not set.
+SystemCallFilter=adjtimex
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

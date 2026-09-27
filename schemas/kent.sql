@@ -189,3 +189,30 @@ CREATE INDEX IF NOT EXISTS idx_telem_model ON inference_telemetry(model_logical,
 CREATE INDEX IF NOT EXISTS idx_frontier_provider ON frontier_log(provider, timestamp);
 CREATE INDEX IF NOT EXISTS idx_egress_flagged ON egress_telemetry(flagged, timestamp);
 CREATE INDEX IF NOT EXISTS idx_stack_telem ON stack_telemetry(stack_id, timestamp);
+
+-- Kent's evaluation of Gent-published learnings. Kent only READS each Gent's
+-- stack.db (shared_learnings); its verdicts live here, keyed by (stack, id).
+CREATE TABLE IF NOT EXISTS learning_reviews (
+    stack_id TEXT NOT NULL,
+    learning_id INTEGER NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    verdict TEXT NOT NULL,                  -- adopt, discard, escalate
+    confidence REAL,
+    notes TEXT,
+    reviewer_tier TEXT,                     -- gateway tier that produced the verdict
+    PRIMARY KEY (stack_id, learning_id)
+);
+
+-- Kent's assessment of a finished Gent project (kent-gent assess).
+CREATE TABLE IF NOT EXISTS gent_assessments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stack_id TEXT NOT NULL REFERENCES stack_registry(stack_id),
+    assessed_at TEXT NOT NULL,
+    usefulness INTEGER,                     -- 1 (useless) .. 5 (production-ready)
+    verdict TEXT NOT NULL,                  -- accept, revise, reject
+    strengths TEXT,
+    weaknesses TEXT,
+    notes TEXT,
+    reviewer_tier TEXT NOT NULL,
+    published_commit TEXT                   -- Gitea commit of the published workspace
+);

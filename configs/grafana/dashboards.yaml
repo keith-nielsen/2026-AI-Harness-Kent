@@ -1,0 +1,10 @@
+# /etc/grafana/provisioning/dashboards/kent.yaml — installed by install/services/grafana
+apiVersion: 1
+providers:
+  - name: kent
+    folder: Kent
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/kent/grafana/dashboards

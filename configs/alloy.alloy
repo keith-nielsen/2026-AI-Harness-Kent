@@ -1,0 +1,60 @@
+// /etc/kent/alloy/config.alloy
+// Kent — Grafana Alloy: ship the systemd journal (system + user units) to the
+// local Loki. Installed by install/services/alloy/install.sh.
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// Journal metadata -> Loki labels (low-cardinality only).
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal__systemd_user_unit"]
+    target_label  = "user_unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "syslog_identifier"
+  }
+}
+
+loki.source.journal "system" {
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "systemd-journal", host = constants.hostname }
+  forward_to    = [loki.process.kent.receiver]
+}
+
+// Kent gateway activity/denial events are JSON lines: lift event type and
+// identity into labels so Grafana can filter "who called what" directly.
+loki.process "kent" {
+  forward_to = [loki.write.local.receiver]
+
+  stage.match {
+    selector = "{unit=\"kent-litellm.service\"} |= \"kent_event\""
+
+    stage.json {
+      expressions = { kent_event = "kent_event", identity = "identity" }
+    }
+    stage.labels {
+      values = { kent_event = "", identity = "" }
+    }
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://127.0.0.1:3100/loki/api/v1/push"
+  }
+}

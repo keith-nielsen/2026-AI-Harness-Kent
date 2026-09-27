@@ -1,36 +1,42 @@
-# /etc/prometheus/prometheus.yml
-# Kent — Prometheus Configuration
+# /etc/kent/prometheus/prometheus.yml
+# Kent — Prometheus configuration (Prometheus 3.x). Installed by
+# install/services/prometheus/install.sh. Every target listens on 127.0.0.1.
 
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
 scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+
   - job_name: "node"
     static_configs:
       - targets: ["127.0.0.1:9100"]
 
+  # LiteLLM gateway (prometheus callback). Scraped with the gateway's "metrics"
+  # identity key, which can read /metrics/ and nothing else.
   - job_name: "litellm"
+    metrics_path: "/metrics/"
+    authorization:
+      type: Bearer
+      credentials_file: /etc/kent/prometheus/credentials/litellm_metrics_key
     static_configs:
       - targets: ["127.0.0.1:4000"]
-    metrics_path: "/metrics"
-
-  - job_name: "gitea"
-    static_configs:
-      - targets: ["127.0.0.1:3000"]
-    metrics_path: "/metrics"
 
   - job_name: "loki"
     static_configs:
       - targets: ["127.0.0.1:3100"]
-    metrics_path: "/metrics"
 
-  # Placeholder: Ollama exporter (add when available)
-  # - job_name: "ollama"
-  #   static_configs:
-  #     - targets: ["127.0.0.1:9101"]
+  - job_name: "alloy"
+    static_configs:
+      - targets: ["127.0.0.1:12345"]
 
-  # Placeholder: Squid exporter
-  # - job_name: "squid"
-  #   static_configs:
-  #     - targets: ["127.0.0.1:9301"]
+  - job_name: "grafana"
+    static_configs:
+      - targets: ["127.0.0.1:3001"]
+
+  - job_name: "gitea"
+    static_configs:
+      - targets: ["127.0.0.1:3000"]

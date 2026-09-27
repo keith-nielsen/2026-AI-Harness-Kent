@@ -1,47 +1,131 @@
 # /etc/litellm/config.dev.yaml
-# Kent — Dev Gateway Configuration (RTX 2060 SUPER 8GB)
+# Kent — Dev Gateway Configuration (RTX 2060 SUPER 8GB), local-only testing
 #
-# Architecture:
-#   Router  → Qwen2.5-0.5B (CPU via Ollama)
-#   Fast    → Qwen2.5-7B Q4_K_M (local GPU via Ollama, mechanical tasks only)
-#   Smart   → DeepSeek V4 Flash:free (cloud)
-#   Frontier→ DeepSeek V4 Flash:free (cloud, same model for now)
+# Every tier points at the same local llama.cpp server for now, so the whole
+# routing path can be exercised without cloud keys or spend:
+#   Router  → local llama.cpp server (user-managed, currently Qwen3.6-35B-A3B)
+#   Fast    → same local server — "routine" commands
+#   Smart   → same local server (target: Claude Opus 5.5, see litellm_config.yaml)
+#   Frontier→ same local server (target: Claude Opus 5.5)
 #
-# The Arch Router (in the Gent CEO) classifies tasks:
-#   confidence >= 0.99 (purely mechanical) → fast
-#   confidence < 0.99 (anything else)      → cloud (smart or frontier)
+# Clients call model "auto": the router tier classifies each request as
+# fast / smart / frontier, then LiteLLM forwards it to that tier. Clients can
+# still call a tier by name directly.
+#
+# The local server is llama-server started by the user (e.g.
+# ~/.local/bin/llamaserver-qwen36-optimum.sh). It exposes one model under the
+# alias "locally-run-model" at http://127.0.0.1:8080/v1. llama-server needs no
+# API key, but LiteLLM's openai/ provider requires a non-empty value.
 
 model_list:
-  # --- T0 Router (CPU tiny model) ---
+  # --- Classify-then-route entry point ---
+  - model_name: "auto"
+    litellm_params:
+      model: "auto_router/complexity_router"
+      complexity_router_config:
+        classifier_type: "llm"
+        classifier_llm_config:
+          model: "router"
+          # Local model on the 2060: allow for prefill of the rubric + request.
+          timeout_ms: 15000
+        tier_definitions:
+          - name: "fast"
+            description: >-
+              Routine, mechanical requests with an obvious answer: formatting,
+              extraction, short factual lookups, simple rewrites, running a
+              single well-specified command, summarising short text.
+          - name: "smart"
+            description: >-
+              Ordinary engineering and knowledge work that needs some reasoning:
+              writing or editing code, debugging with clear symptoms, multi-step
+              but well-scoped tasks, explanations that need judgement.
+          - name: "frontier"
+            description: >-
+              Hard or high-stakes work: open-ended design and architecture,
+              subtle debugging, novel problems, long multi-part reasoning, or
+              anything where a wrong answer is costly.
+        tiers:
+          fast: "fast"
+          smart: "smart"
+          frontier: "frontier"
+        # Unclassifiable or failed classification goes to the most capable
+        # tier ("when in doubt, escalate").
+        fallback_tier: "frontier"
+
+  # --- T0 Router (local; shares the llama.cpp server until a dedicated router model runs) ---
   - model_name: "router"
     litellm_params:
-      model: "ollama/qwen2.5:0.5b"
-      api_base: "http://localhost:11434"
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
 
-  # --- T1 Fast (local GPU — mechanical tasks via Ollama) ---
+  # --- T1 Fast (local — routine commands) ---
   - model_name: "fast"
     litellm_params:
-      model: "ollama/qwen2.5:7b-instruct-q4_K_M"
-      api_base: "http://localhost:11434"
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
 
-  # --- T2 Smart (cloud — routine reasoning, free tier) ---
+  # --- T2 Smart (local for testing) ---
   - model_name: "smart"
     litellm_params:
-      model: "deepseek/deepseek-v4-flash:free"
-      api_key: "os.environ/DEEPSEEK_API_KEY"
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
 
-  # --- T3 Frontier (cloud — also flash:free for now) ---
+  # --- T3 Frontier (local for testing) ---
   - model_name: "frontier"
     litellm_params:
-      model: "deepseek/deepseek-v4-flash:free"
-      api_key: "os.environ/DEEPSEEK_API_KEY"
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
 
 router_settings:
   routing_strategy: "simple-shuffle"
   num_retries: 1
-  timeout: 120
+  # If a call fails, answer from the local fast tier instead of erroring.
+  # Fallbacks match the model name the caller asked for, so "auto" needs its
+  # own entry (otherwise a request routed to a failing tier returns 500).
+  fallbacks:
+    - smart: ["fast"]
+    - frontier: ["fast"]
+    - auto: ["fast"]
+  # Fall back immediately on timeouts and auth/bad-request errors; retry
+  # once only where a retry can help (rate limits, provider 5xx). Without
+  # this, num_retries multiplies the time before fallback.
+  retry_policy:
+    TimeoutErrorRetries: 0
+    AuthenticationErrorRetries: 0
+    BadRequestErrorRetries: 0
+    ContentPolicyViolationErrorRetries: 0
+    RateLimitErrorRetries: 1
+    InternalServerErrorRetries: 1
+  # Local generation on the 2060 runs ~35 tok/s; long answers need headroom.
+  timeout: 600
 
+# Identity-based access, no database: kent_gateway (install/services/litellm/
+# kent_gateway.py) maps each key to an identity (operator / kent / gent) and
+# the tiers it may call, and logs every call and every denial as JSON to stdout.
+# Both LiteLLM switches below are required for LiteLLM to enforce the model
+# list; kent_gateway also enforces it itself.
 general_settings:
-  master_key: "os.environ/LITELLM_ADMIN_KEY"
-  database_url: "os.environ/DATABASE_URL"
-  enable_key_tracking: true
+  custom_auth: "kent_gateway.user_api_key_auth"
+  custom_auth_run_common_checks: true
+
+litellm_settings:
+  enable_post_custom_auth_checks: true
+  # activity_logger: per-call JSON to journald; prometheus: /metrics/ for Prometheus
+  # (scraped with the "metrics" identity key).
+  callbacks: ["kent_gateway.activity_logger", "prometheus"]

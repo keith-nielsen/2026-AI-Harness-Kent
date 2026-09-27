@@ -21,7 +21,7 @@ Usage: sudo $0 [OPTIONS]
 
 Options:
   --phase N     Start from phase N (0-8). Overrides auto-resume.
-  --dev         Use dev-mode models (small VRAM footprint, NVIDIA CUDA).
+  --dev         Use the dev gateway config (configs/litellm_config.dev.yaml).
   --cloud       All tiers via cloud API (DeepSeek V4 Flash). For flow testing
                 on hardware too limited for local models. Requires DEEPSEEK_API_KEY.
   --dry-run     Show what would be done without executing.
@@ -32,11 +32,11 @@ Environment:
                   Default: the user who invoked sudo.
 
 Phases:
-  0  OS Base        — ROCm/CUDA, Python 3.12, Docker, users/groups
+  0  OS Base        — Python 3.12, Docker, users/groups
   1  Storage & Git  — SQLite, Gitea, schema init
-  2  Inference      — Ollama, model pulls, Unix socket
+  2  Inference      — check the user's llama.cpp endpoint (no install)
   3  Gateway        — LiteLLM, scoped API keys, auth tests
-  4  Security       — Squid proxy, Docker network, AIDE, firewall, systemd-oomd
+  4  Security       — Squid proxy, Docker network, AIDE, systemd-oomd
   5  Observability  — Prometheus, Loki, Grafana, exporters
   6  Kent Agent     — Hermes install, kent.db, Gitea PAT, crons
   7  Gent Template  — Docker image, compose template, spawn/destroy
