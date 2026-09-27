@@ -199,3 +199,31 @@ def test_breaker_halts_even_if_gitea_is_down(env, monkeypatch):
     poller.main()
     assert registry_status(kdb) == "paused"
     assert any("issue FAILED" in a[2] for a in calls["audit"] if a[1] == "circuit_breaker")
+
+
+
+def set_status(kdb, status):
+    con = sqlite3.connect(kdb); con.execute("UPDATE stack_registry SET status=?", (status,)); con.commit(); con.close()
+
+
+def test_archived_gent_learnings_still_reviewed_and_escalations_expire(env):
+    poller, calls, _, add, stacks, kdb = env
+    add("technique", "Compare versions as integer tuples", "parse with a regex")
+    add("escalation_request", "ESCALATION for t1", "q")
+    set_status(kdb, "archived")
+    poller.main()
+    r = {x["learning_id"]: x for x in reviews(kdb)}
+    assert r[1]["verdict"] == "adopt" and r[2]["verdict"] == "expired"
+    assert not [c for c in calls["chat"] if c[0] == "frontier"]       # no frontier spend for a retired Gent
+    assert calls["docker"] == []                                       # breaker only for active Gents
+
+
+def test_paused_gent_escalation_waits(env):
+    poller, calls, _, add, stacks, kdb = env
+    add("escalation_request", "ESCALATION for t1", "q")
+    set_status(kdb, "paused")
+    poller.main()
+    assert reviews(kdb) == []
+    set_status(kdb, "active")
+    poller.main()
+    assert reviews(kdb)[0]["verdict"] == "escalated"

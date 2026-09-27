@@ -1,8 +1,9 @@
 # Kent service modules
 
 Each supporting service is installed by its own module under `install/services/<name>/`
-(`install.sh`, `uninstall.sh`, units, and a manifest of everything it created). These
-modules replace the legacy `install/phase_*.sh` scripts.
+(`install.sh`, `uninstall.sh`, units, and a manifest of everything it created). The
+modules are the only installer; the earlier monolithic `install/phase_*.sh` scripts
+were retired in v0.1.0-rc.2.
 
 Status as of 2026-09-27 (all installed and verified on the reference machine):
 

@@ -2,70 +2,71 @@ name: Validate
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  lint-shell:
-    runs-on: ubuntu-latest
+  shellcheck:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Shellcheck install scripts
+      - name: Shellcheck service modules and tools
+        # SC2034 is excluded: SERVICE is set by each module and consumed by the
+        # sourced lib-service.sh, which shellcheck cannot follow.
         run: |
-          sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck install/*.sh scripts/*.sh 2>&1 | tee shellcheck.log
-          echo "Shellcheck completed (non-fatal)"
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning -e SC2034 \
+            install/services/*.sh install/services/*/*.sh \
+            install/services/litellm/kent-litellm-start \
+            install/dev/*.sh tests/gent/*.sh
 
-  validate-yaml:
-    runs-on: ubuntu-latest
+  configs:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Validate YAML configs
+      - name: YAML, JSON and Python syntax
         run: |
-          python3 -c "
-          import yaml, sys, os
+          python3 - <<'PY'
+          import json, pathlib, py_compile, sys, yaml
           errors = []
-          for root, dirs, files in os.walk('.'):
-              for f in files:
-                  if f.endswith(('.yaml', '.yml')) and not f.startswith('.'):
-                      path = os.path.join(root, f)
-                      try:
-                          with open(path) as fh:
-                              yaml.safe_load(fh)
-                      except yaml.YAMLError as e:
-                          errors.append(f'{path}: {e}')
-          if errors:
-              for e in errors:
-                  print(e, file=sys.stderr)
-              sys.exit(1)
-          else:
-              print('All YAML files valid')
-          "
+          root = pathlib.Path(".")
+          for p in root.rglob("*"):
+              if ".git" in p.parts or not p.is_file():
+                  continue
+              try:
+                  if p.suffix in (".yaml", ".yml"):
+                      yaml.safe_load(p.read_text())
+                  elif p.suffix == ".json":
+                      json.loads(p.read_text())
+                  elif p.suffix == ".py" or p.name in ("kent-spawn-gent", "kent-destroy-gent"):
+                      py_compile.compile(str(p), doraise=True)
+              except Exception as e:  # noqa: BLE001
+                  errors.append(f"{p}: {e}")
+          print("\n".join(errors) or "all configs and Python files parse")
+          sys.exit(1 if errors else 0)
+          PY
+      - name: Pinned artifacts
+        run: |
+          grep -q '^FROM python@sha256:' install/services/gent/image/Dockerfile
+          grep -c -- '--hash=sha256:' install/services/litellm/requirements.lock
+          grep -c -- '--hash=sha256:' install/services/gent/image/requirements.lock
+          for v in PROMETHEUS NODE_EXPORTER LOKI GITEA; do grep -q "^${v}_SHA256=[0-9a-f]\{64\}$" install/services/versions.env; done
 
-  lint-dockerfile:
-    runs-on: ubuntu-latest
+  unit-tests:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Check Dockerfile exists
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the gateway's locked dependencies + test runner
         run: |
-          if [ -f templates/Dockerfile.fractal ]; then
-            echo "Dockerfile found"
-            head -5 templates/Dockerfile.fractal
-          else
-            echo "No Dockerfile found (OK for architecture-phase)"
-          fi
-
-  check-structure:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verify essential directories exist
-        run: |
-          for dir in docs install schemas scripts configs templates skills; do
-            if [ -d "$dir" ]; then
-              echo "✓ $dir/"
-            else
-              echo "✗ $dir/ — MISSING"
-            fi
-          done
+          python -m venv .venv
+          .venv/bin/pip install -q --require-hashes -r install/services/litellm/requirements.lock
+          .venv/bin/pip install -q "pytest==8.4.2" "pytest-asyncio==1.2.0"
+      - name: Unit tests (gateway, kent-core, Gent CEO, install library)
+        run: .venv/bin/python -m pytest -q tests/gateway tests/kent_core tests/gent tests/install

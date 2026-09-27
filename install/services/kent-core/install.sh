@@ -112,7 +112,11 @@ for f in "$HERE"/systemd-user/*; do
     run install -m 0644 -o "$OP" -g "$OG" "$f" "$dest"
 done
 run systemctl --user -M "${OP}@" daemon-reload
-for t in "$HERE"/systemd-user/*.timer; do run systemctl --user -M "${OP}@" enable --now "$(basename "$t")"; done
+# enable, then restart: an already-active timer keeps its old schedule until restarted.
+for t in "$HERE"/systemd-user/*.timer; do
+    run systemctl --user -M "${OP}@" enable "$(basename "$t")"
+    run systemctl --user -M "${OP}@" restart "$(basename "$t")"
+done
 
 # --- Verify ------------------------------------------------------------------------
 if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -124,7 +128,18 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     RU /usr/bin/python3 "$OPT/bin/kent_audit.py" anchor >/dev/null || die "audit chain does not verify"
     RU /usr/bin/python3 "$OPT/bin/kent_audit_ingest.py" >/dev/null || die "audit ingest failed"
     RU /usr/bin/python3 "$OPT/bin/kent_digest.py" >/dev/null || die "digest failed"
-    n=$(systemctl --user -M "${OP}@" list-timers 'kent-*' --no-legend 2>/dev/null | grep -c kent- || true)
+    # Count timers that are armed: a next run scheduled, or their job running right now
+    # (a dormant timer shows "-" with an idle service). Retried briefly for running jobs.
+    armed() {
+        local c=0 t
+        for t in "$HERE"/systemd-user/*.timer; do
+            t="$(basename "$t" .timer)"
+            if [[ "$(systemctl --user -M "${OP}@" show "$t.timer" -p NextElapseUSecRealtime --value 2>/dev/null)" =~ [0-9] ]] \
+               || systemctl --user -M "${OP}@" is-active --quiet "$t.service" 2>/dev/null; then c=$((c + 1)); fi
+        done
+        echo "$c"
+    }
+    for _ in $(seq 1 30); do n="$(armed)"; [[ "$n" -eq 5 ]] && break; sleep 2; done
     [[ "$n" -ge 5 ]] || die "expected 5 kent timers, found $n"
     grep -q "Estate Manager" "$PROFILE/SOUL.md" || die "Kent SOUL.md not in place"
     log "OK: kent-core installed; audit chain valid; digest written; $n timers active"

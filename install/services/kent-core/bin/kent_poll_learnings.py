@@ -115,8 +115,12 @@ def parse_verdict(text: str) -> dict:
 def main() -> int:
     c = kentlib.conf()
     kdb = kentlib.kent_db(c)
+    # Learnings of paused and archived Gents are still reviewed (retiring a Gent must not
+    # discard what it learned); escalations are only answered for active Gents.
+    status = {r["stack_id"]: r["status"] for r in kdb.execute(
+        "SELECT stack_id, status FROM stack_registry WHERE status IN ('active','paused','archived')")}
     active = {r["stack_id"]: r["gitea_repo"] for r in kdb.execute("SELECT stack_id, gitea_repo FROM stack_registry WHERE status='active'")}
-    stacks = list(active)
+    stacks = list(status)
     reviewed = 0
     over_budget: set[str] = set()
     for sid in stacks:
@@ -128,6 +132,13 @@ def main() -> int:
             if row["id"] in done:
                 continue
             text = f"[{row['category']}] {row['summary']}\n{row['detail'] or ''}"[:6000]
+            if row["category"] == "escalation_request" and status[sid] == "paused":
+                continue                        # answered once the Gent is resumed
+            if row["category"] == "escalation_request" and status[sid] == "archived":
+                kdb.execute("INSERT INTO learning_reviews VALUES (?,?,?,?,?,?,?)",
+                            (sid, row["id"], now(), "expired", None, "Gent archived before the escalation was answered", "none"))
+                kdb.commit()
+                continue
             if row["category"] == "escalation_request":
                 used = kdb.execute("SELECT COUNT(*) FROM learning_reviews WHERE stack_id=? AND verdict='escalated' "
                                    "AND reviewed_at >= ?", (sid, (datetime.now(timezone.utc) - timedelta(hours=24))
@@ -171,11 +182,11 @@ def main() -> int:
             kdb.commit()
             kentlib.audit("kent", f"learning_{verdict['verdict']}", f"stack={sid} learning={row['id']} tier={tier}")
             reviewed += 1
-    for sid in stacks:
+    for sid in active:
         sdb = kentlib.stack_db_ro(c, sid)
         if sdb is not None and (reasons := breaker_reasons(sdb, sid in over_budget)):
             trip_breaker(c, kdb, sid, active[sid], reasons)
-    print(f"reviewed {reviewed} learning(s) across {len(stacks)} active stack(s)")
+    print(f"reviewed {reviewed} learning(s) across {len(stacks)} stack(s) ({len(active)} active)")
     return 0
 
 

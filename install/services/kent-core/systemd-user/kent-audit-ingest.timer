@@ -2,10 +2,11 @@
 Description=Kent: append security events to the HMAC audit chain (schedule)
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
-Persistent=true
+# Calendar schedule: unlike OnBootSec/OnUnitActiveSec it re-arms whenever the timer
+# is (re)started, e.g. after a reinstall without a reboot.
+OnCalendar=*-*-* *:00/5:00
 RandomizedDelaySec=30
+Persistent=true
 
 [Install]
 WantedBy=timers.target

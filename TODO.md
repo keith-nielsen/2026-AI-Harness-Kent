@@ -1,27 +1,33 @@
-# Kent — Development TODO
+# Kent — TODO
 
-> Near-term work items for the Kent enterprise agentic AI stack.
-> See [docs/roadmap.md](docs/roadmap.md) for the broader vision.
+Near-term work. Status of every control: [`docs/controls.md`](docs/controls.md);
+assessment history and open items: [`docs/conformance.md`](docs/conformance.md).
 
-**Status:** Pre-alpha / Architecture phase
+**Status:** v0.1.0 release candidate
 
-## Immediate
+## To v0.1.0
 
-- [ ] Write `docs/installation.md` — standalone prose install guide beyond the scripts
-- [ ] Validate E2E — run `sudo ./install.sh --cloud` and verify all 8 phase test gates pass
-- [ ] First Gent spawn — spawn a Gent from template, verify CEO agent connects to LiteLLM gateway and completes a task
+- [ ] Anthropic key: `--config prod`, `FALLBACK_TIMEOUT=120`, re-run conformance and one tiny Gent simulation with live Opus
+- [ ] Merge the release branch and tag `v0.1.0`
 
-## Short-term
+## Regulated-workload gaps (controls.md)
 
-- [ ] Knowledge sharing — verify cross-pollination: Gent A publishes a learning, Gent B inherits it
-- [ ] Seed-from archive — archive a Gent, spawn a new one with seed-from, verify domain knowledge transfer
-- [ ] Production hardening — validate all entries in the privilege map, run container isolation tests, verify HMAC chain integrity
+- [ ] DP-3 Redaction / DLP before cloud calls; DP-4 provider zero-retention + BAA/DPA
+- [ ] DP-5 Encryption at rest; DP-6 backups; RO-4 disaster-recovery plan
+- [ ] LM-6/7 Off-host immutable log shipping with configurable retention
+- [ ] AC-7 MFA/SSO for Grafana and Gitea
+- [ ] NS-4 Host firewall default-deny; NS-5 egress POST allowlist with approvals
+- [ ] CM-6 Vulnerability scanning + SBOM (pip-audit, trivy); CM-7 AIDE; CM-8 scheduled key rotation
+- [ ] RO-6 systemd-oomd policies for heavy services
 
-## Medium-term
+## Features
 
-- [ ] Open for public collaboration — update CONTRIBUTING.md, tag v0.1.0-prealpha release
-- [ ] Quick-start Docker Compose — cloud-only mode so anyone can try the architecture in 2 commands without a GPU
+- [ ] Seed-from archive (architecture §11.2)
+- [ ] Push adopted learnings to running Gents; give the judge its past verdicts (dedupe)
+- [ ] Stronger learning uptake by local models (make "apply team knowledge" part of expected output)
+- [ ] Dev-mode judge: raise the adoption bar or require operator approval when the judge is local
+- [ ] llama.cpp as a managed service (own account and unit)
+- [ ] Grafana alert rules + notification channel
+- [ ] Layer-3 prompt-injection tests against Kent (sandboxed profile)
 
----
-
-*Items move to GitHub Issues when concrete enough to assign. Last updated: 2026-05-26*
+*Items move to GitHub Issues when concrete enough to assign. Last updated: 2026-09-28.*

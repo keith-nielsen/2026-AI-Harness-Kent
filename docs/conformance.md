@@ -7,10 +7,12 @@ and move items between **Open** and **Closed**.
 
 | | |
 |---|---|
-| Last assessed | 2026-09-28 (reference machine HomePC1, Ubuntu 24.04, RTX 2060 SUPER 8 GB) |
+| Last assessed | 2026-09-28, v0.1.0-rc.2 (reference machine: Ubuntu 24.04, RTX 2060 SUPER 8 GB, 64 GB RAM) |
 | Automated check | `python3 tests/conformance/conformance.py [--markdown FILE]` (operator, no root, read-only) |
 | Result | **99 PASS · 0 FAIL · 6 INFO** |
-| Test suites | 212 unit (`tests/gateway`, `tests/kent_core`, `tests/gent`, `tests/install`) · 46 live (`tests/live`) · 24 in-container Gent tool checks (`tests/gent/run_tools_selftest.sh`) |
+| Test suites | 214 unit (gateway 145, kent_core 42, Gent CEO 12, install 15) · 46 live (`tests/live`) · 24 in-container Gent checks (`tests/gent/run_tools_selftest.sh`) · router probe |
+| Manual validation | [`manual-validation.md`](manual-validation.md): operator runbook with prompts, commands, telemetry queries, expected outputs and a sign-off table |
+| Control matrix | [`controls.md`](controls.md): each enterprise control with evidence, status and framework mapping |
 | Rollback | Full purge-uninstall of all modules returns the host to the pre-install baseline (only non-Kent differences remain) |
 | Install record | `~/.local/share/kent/install-records/` (`INSTALL-LOG.md`, snapshots, per-step logs) — local to the machine, not in the repo |
 
@@ -21,7 +23,7 @@ and move items between **Open** and **Closed**.
 These are deliberate departures from `architecture.md`. Conformance is judged against the
 design *with these amendments*; `architecture.md` itself will be revised to match.
 
-| Topic | architecture.md says | Decision (operator) |
+| Topic | Original design (v2.3) | Decision (operator), now in architecture v3.0.0 |
 |---|---|---|
 | Inference engine | Ollama on a Unix socket | Ollama dropped. Local model = operator-run `llama-server` (llama.cpp) on 127.0.0.1:8080; not yet a managed service |
 | Cloud model | DeepSeek + Anthropic | Claude only: smart and frontier → Claude Opus 5.5 (`claude-opus-5-5`) in prod; no DeepSeek |
@@ -46,10 +48,10 @@ design *with these amendments*; `architecture.md` itself will be revised to matc
 | 1 | Entity hierarchy & access rules | ✅ | Gateway identities enforce tiers; Gents can't reach frontier, kent.db, other Gents, or host services |
 | 1.3 / 8.1 | Frontier escalation path | ✅ | Gent → `shared_learnings` → `kent-poll-learnings` → frontier (Kent key) → Gent inbox → task resumes (sim: 3 escalations answered) |
 | 2 / 4 | Four tiers, router classifies everything | ✅ | `auto` = LiteLLM complexity router on local model; live probe: easy→fast 8/8, hard→smart/frontier 8/8, injections in either direction changed nothing |
-| 3 | Inference gateway, scoped keys | ✅ | no key/forged key → 401; Gent → smart/frontier → 403; per-Gent keys hot-loaded; 160 adversarial unit tests + 46 live tests (incl. a fixed `?model=` bypass) |
+| 3 | Inference gateway, scoped keys | ✅ | no key/forged key → 401; Gent → smart/frontier → 403; per-Gent keys hot-loaded; 145 adversarial unit tests + 46 live tests (incl. a fixed `?model=` bypass) |
 | 5 | Frontier tier, fallback | ⚠️ partial | Config and fallback to local fast verified (`FALLBACK_TIMEOUT`); **live Opus calls pending an Anthropic key** |
 | 6 / 7.3 | CrewAI Gent CEO | ✅ | Kanban CEO: ordered tasks, escalation, capped retries, validation against files on disk, heartbeat, crash recovery, report + learnings |
-| 7.2 | Kent duties | ✅ | Spawn/destroy, escalation relay, learnings review + template commits, assessments, daily digest, nightly QA, audit ingest/anchor (5 user timers) |
+| 7.2 | Kent duties | ✅ | Spawn/destroy, escalation relay, learnings review + template commits (including retired Gents), assessments, daily digest, nightly QA, audit ingest/anchor (5 user timers, all verified armed) |
 | 8.2 | Circuit breaker | ✅ | Failed task or 3 escalations of one task → container stopped, Gitea issue, registry `paused`; `kent-gent resume` retries (tested live) |
 | 8.3 | Nightly QA audit | ✅ (untested live) | `kent-qa-audit` timer 02:00; frontier review → `qa_audit_log` |
 | 9 | Data architecture | ✅ | `kent.db` (operator), per-Gent `stack.db` (Gent-owned, Kent read-only via group), registry rows never deleted |
@@ -107,6 +109,9 @@ Found by the simulation (S), rollback test (R) and conformance pass (G). All fix
 | R3 | Audit anchors had no chain identity → reinstall failed verification; an alert line could hide the latest anchor | Per-chain anchors; earlier chains reported |
 | R4 | Fresh Gent install aborted silently (grep under `pipefail`) | Fixed; build failures now print the build log |
 | E1 | Weekly `fstrim` stalled synchronous writes on the root SSD (~110 ms per write) | **Environment**: schedule for idle hours |
+| R5 | After a reinstall without a reboot, the every-minute and every-5-minute timers went dormant (`OnBootSec`/`OnUnitActiveSec`), silently stopping escalations, learning review, the circuit breaker and audit ingest; the check only tested that timers were *listed* | Calendar schedules; the installer restarts timers; installer and conformance now require every timer to be armed |
+| R6 | Learnings of a Gent destroyed before its final review were never reviewed | Poller reviews paused and archived Gents too; escalations of archived Gents expire (no frontier spend); paused ones wait |
+| D1 | Documentation described the retired phase installer, Ollama and DeepSeek | Docs rewritten for the live harness (architecture v3.0.0, privilege map, dev notes, glossary, README); legacy installer, scripts and configs removed; CI rewritten |
 
 ---
 
@@ -120,15 +125,16 @@ Found by the simulation (S), rollback test (R) and conformance pass (G). All fix
 | Egress POST allowlist / access requests / anomaly detection (§15.2–15.4) | Not built |
 | Key rotation (§12.1), per-key token budgets (§12.2) | Not built |
 | Push learnings to running Gents (§10.1 A2A) | Not built (template path only) |
+| Regulated-data gaps | Redaction/DLP before cloud calls, encryption at rest, backups/DR, off-host immutable logs, MFA/SSO: see [`controls.md`](controls.md) "Gaps before regulated data" |
 | Firewall, AIDE, pip-audit/trivy, `chattr +a` | Deferred hardening |
 | Layer-3 prompt-injection tests against Kent | Deferred while the agent sudo grant is active |
 | llama.cpp as a managed service | Deferred by decision |
-| Retire legacy installer | `install/phase_*.sh`, `configs/litellm_config.cloud.yaml` (DeepSeek), `configs/promtail.yaml`, `configs/squid.conf` |
-| Revise `architecture.md` | Fold in the decisions in section 1 |
 
 ---
 
 ## 6. How to re-assess
+
+Manual, operator-run: [`manual-validation.md`](manual-validation.md) (sign-off table in §12). Automated:
 
 ```bash
 python3 tests/conformance/conformance.py --markdown /tmp/conformance.md   # live system
@@ -147,4 +153,5 @@ Rollback test: `install/services/snapshot.sh take <name>` → each module's
 
 | Date | Change |
 |---|---|
-| 2026-09-28 | First report: all modules installed (litellm, prometheus, node_exporter, loki, alloy, grafana, gitea, kent-core, gent); full simulation; two full rollback cycles; 99 PASS / 0 FAIL / 6 INFO |
+| 2026-09-28 | First report (v0.1.0-rc.1): all modules installed (litellm, prometheus, node_exporter, loki, alloy, grafana, gitea, kent-core, gent); full simulation; two full rollback cycles; 99 PASS / 0 FAIL / 6 INFO |
+| 2026-09-28 | v0.1.0-rc.2: legacy installer and configs retired; docs rewritten for the live harness; control matrix and manual validation runbook added (runbook executed end to end on the reference machine, outputs recorded in it); findings R5 and R6 fixed; 99 PASS / 0 FAIL / 6 INFO; 214 unit + 46 live tests |

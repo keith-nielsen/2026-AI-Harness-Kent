@@ -80,15 +80,14 @@ Select the closest matching template from the table above. Then customise:
 
 3. **Customise task descriptions** with the operator's actual inputs, sources, and success criteria. Fill in concrete details, not placeholders.
 
-4. **Select process type**:
-   - `sequential` for pipelines where each agent builds on the previous output (most common, 2-3 agents)
-   - `hierarchical` for complex tasks where a manager delegates subtasks (4+ agents, higher token cost)
+4. **Order the tasks**: the Gent CEO runs tasks one at a time in `tasks.yaml` order,
+   and each task sees the results of the earlier ones. Put dependencies first.
 
-5. **Assign model tiers**:
-   - Workers default to `fast` for the research template, `smart` for content and analysis
-   - Manager (hierarchical only) always uses `smart`
-   - Reviewer agents use `smart` regardless of template
-   - If the operator says "use frontier" or the task clearly exceeds local capability, note this as requiring escalation
+5. **Plan for the local model**: every Gent worker runs on the local `fast` tier; Gents
+   cannot use smart or frontier. Keep each task small and concrete (name the files to
+   write). Where a task needs expert judgement a small model is likely to get wrong
+   (licensing, security-critical choices, novel design), mark it `escalate: true` with a
+   precise `question`: you (Kent) will answer it on frontier before the team starts.
 
 ### Phase 3: Design Review
 
@@ -100,8 +99,8 @@ TEMPLATE: <template_name> (customised)
 PROCESS: <sequential|hierarchical>
 
 AGENTS:
-  1. <Role> — <Goal summary> [tier: fast|smart]
-  2. <Role> — <Goal summary> [tier: fast|smart]
+  1. <Role> — <Goal summary>
+  2. <Role> — <Goal summary>
   ...
 
 TASK PIPELINE:
@@ -112,7 +111,8 @@ TASK PIPELINE:
       Expected output: <what good looks like>
   ...
 
-ESTIMATED COST: <low|medium|high> (based on agent count and tiers)
+ESCALATIONS: <tasks marked escalate: true, with the question> (frontier, via Kent)
+EFFORT: <limits: max_iter / max_tokens> (keep small on local hardware)
 ```
 
 Do NOT show raw YAML at this stage. The operator should approve the design before seeing config files.
@@ -132,17 +132,20 @@ On approval, generate the crew configuration files:
      --template <template_name> \
      --output-dir <staging_dir> \
      --project-name "<operator's project name>" \
+     --goal "<the deliverable and who uses it>" \
      --customisations '<JSON string of customisations>'
    ```
 
 2. The script produces:
+   - `project.yaml` — name, goal and effort limits (required by `kent-gent spawn`)
    - `agents.yaml` — customised agent definitions
    - `tasks.yaml` — customised task definitions
-   - `crew_config.json` — metadata (template, process type, tier assignments, timestamp)
+   - `crew_config.json` — metadata (template, process type, timestamp)
 
 3. Show the operator the generated file paths and offer to display the YAML for final review.
 
-4. If the operator approves for spawn, report that the configs are staged and ready. The actual spawn is a separate operation (spawn-gent script reads from the staging directory).
+4. If the operator approves, spawn it: `kent-gent spawn --name "<name>" --project <staging_dir>`,
+   then report the stack id (see "Spawning" below).
 
 ## Template Details
 
@@ -154,7 +157,7 @@ Best for fact-finding, source validation, and structured summaries.
 - **Reviewer**: Validates the final output for accuracy and completeness
 
 Process: sequential (Researcher → Analyst → Reviewer)
-Default tier: fast for Researcher, smart for Analyst and Reviewer
+All workers run on the local fast tier (Gents are local-only)
 
 ### Content Template
 Best for producing written deliverables: reports, articles, briefs.
@@ -164,7 +167,7 @@ Best for producing written deliverables: reports, articles, briefs.
 - **Editor**: Reviews for clarity, accuracy, tone, and completeness
 
 Process: sequential (Researcher → Writer → Editor)
-Default tier: smart for all agents (writing quality matters)
+All workers run on the local fast tier; escalate genuinely hard writing decisions
 
 ### Analysis Template
 Best for data-driven insights from structured or semi-structured data.
@@ -175,14 +178,15 @@ Best for data-driven insights from structured or semi-structured data.
 - **Reviewer**: Validates methodology, checks calculations, flags limitations
 
 Process: hierarchical (Analyst manages, delegates to Collector and Writer, Reviewer validates)
-Default tier: fast for Collector, smart for Analyst/Writer/Reviewer
+All workers run on the local fast tier. The Gent CEO runs tasks sequentially, so list them in order
 
 ## Pitfalls
 
 - **Over-engineering**: Resist the urge to add agents. Start with the template's default count. The operator can always iterate.
 - **Vague goals**: If the operator says "research AI", push back. Get a specific deliverable: "a 2-page summary of transformer architecture advances in 2025 with source citations."
 - **Missing inputs**: A crew with no input data will hallucinate. Confirm what sources are available before designing.
-- **Frontier assumptions**: Never default to frontier tier. It costs real money and requires escalation. Only flag it if the operator explicitly requests it or the task clearly exceeds smart-tier capability.
+- **Frontier assumptions**: Gents never call frontier. Use `escalate: true` sparingly (budget: 5 per Gent per day); each one is a frontier call made by you.
+- **Oversized tasks**: the local model is slow. Several small tasks beat one big one.
 - **Premature YAML**: Don't dump YAML at the operator. Present the human-readable design first. YAML is the output artifact, not the communication medium.
 
 ## Verification

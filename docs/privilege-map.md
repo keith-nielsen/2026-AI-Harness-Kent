@@ -1,298 +1,153 @@
 # Kent — Privilege Map
 
-Security reference for the Kent agentic computing estate. Documents every
-filesystem path, its ownership, permissions, and the processes that access
-it. Also covers network boundaries, group memberships, and privilege
-escalation paths.
+Every account, path, port, credential and privileged action a Kent install
+creates, with owner and mode. Source of truth: the module manifests in
+`/var/lib/kent/manifest/<module>` (what uninstall removes) and the installers in
+`install/services/`. Verified on the reference machine for v0.1.0-rc;
+`tests/conformance/conformance.py` re-checks accounts, listeners, hardening and
+secret file modes.
 
-This document is the authoritative source for access control decisions.
-Any new path, service, or permission change must be reflected here before
-implementation.
+`<op>` = the operator account that ran the installers (e.g. `administrator`).
 
-## Design Principles
+---
 
-1. **Least privilege by default.** Every process runs as a dedicated
-   unprivileged user. Root access is granted only through explicit,
-   auditable sudoers entries for specific commands.
+## 1. Accounts
 
-2. **No ambient authority.** Docker group membership is root-equivalent
-   and is never granted to system users. Container lifecycle is managed
-   through sudoers-controlled scripts only.
+| Account:group | Created by | Home / shell | Runs | Removed by |
+|---|---|---|---|---|
+| `litellm:litellm` | litellm module | none / nologin | `kent-litellm.service` | litellm uninstall |
+| `prometheus:prometheus` | prometheus module | none / nologin | `kent-prometheus.service` | prometheus uninstall |
+| `node_exporter:node_exporter` | node_exporter module | none / nologin | `kent-node-exporter.service` | node_exporter uninstall |
+| `loki:loki` | loki module | none / nologin | `kent-loki.service` | loki uninstall |
+| `alloy:alloy` | Alloy apt package (installed by Kent) | package default | `alloy.service` (+ Kent drop-in) | `apt purge` via alloy uninstall |
+| `grafana:grafana` | Grafana package (pre-existing, not Kent's) | package default | `grafana-server.service` (+ Kent drop-in) | never (not Kent's) |
+| `gitea:gitea` | gitea module | none / nologin | `kent-gitea.service` | gitea uninstall |
+| `kent-squid:kent-squid` | gent module | none / nologin | `kent-squid.service` | gent uninstall |
+| `gent-<id>:gent-<id>` | `kent-spawn-gent` | `/nonexistent` / nologin | container `kent-gent-<id>` | `kent-destroy-gent` |
+| DynamicUser | systemd | — | `kent-gent-egress.service`, `kent-gent-gateway.service` | automatic |
+| `<op>` | — (existing) | existing | Kent (Hermes `kent` profile), Kent user timers, llama-server | — |
 
-3. **Secrets are opaque to consumers.** Each service reads only the
-   secrets it needs. Kent reads kent_key.txt but never gateway.env.
-   Gents read their own gent_key.txt but never Kent's key or the
-   admin key.
+No account is shared between services. The installers refuse to adopt an
+existing account or group they did not create.
 
-4. **Install as root, chown to runtime user.** Every file created
-   during install is immediately chowned to whoever needs it at
-   runtime. Files are never left as root-owned if a non-root process
-   needs to read or write them.
+Group memberships Kent relies on (not created by Kent): `<op>` in `docker` (Kent
+inspects and stops Gent containers) and `adm` (reads the journal).
 
-5. **Containers are read-only.** Gent containers run with read_only: true,
-   all capabilities dropped, no-new-privileges set. Writable paths are
-   explicit tmpfs mounts or bind-mounted data volumes.
+---
 
-## System Users
+## 2. Listening ports
 
-| User | UID | Type | Shell | Home | Purpose |
-|------|-----|------|-------|------|---------|
-| kent | system | system | nologin | /home/kent | Estate manager agent |
-| litellm | system | system | nologin | /home/litellm | Inference gateway |
-| ollama | system | system | nologin | /usr/share/ollama | Model inference engine |
-| gitea | system | system | nologin | /home/gitea | Git server |
-| prometheus | system | system | nologin | /var/lib/prometheus | Metrics collection |
-| loki | system | system | nologin | /var/lib/loki | Log aggregation |
-| promtail | system | system | nologin | (none) | Log shipping agent |
-| gent-{id} | system | system | nologin | /home/kent/stacks/{id} | Per-Gent container user |
+| Address | Service | Account | Reachable from |
+|---|---|---|---|
+| 127.0.0.1:4000 | LiteLLM gateway | litellm | host |
+| 127.0.0.1:9090 | Prometheus | prometheus | host |
+| 127.0.0.1:9100 | node_exporter | node_exporter | host |
+| 127.0.0.1:3100, :9095 | Loki HTTP, gRPC | loki | host |
+| 127.0.0.1:12345 | Alloy UI/metrics | alloy | host |
+| 127.0.0.1:3001 | Grafana | grafana | host |
+| 127.0.0.1:3000 | Gitea | gitea | host |
+| 127.0.0.1:3129 | kent-squid (egress proxy) | kent-squid | host (via the bridge for Gents) |
+| 172.30.0.1:4000 | gateway bridge (socket proxy) | DynamicUser | Gent network only |
+| 172.30.0.1:3129 | egress bridge (socket proxy) | DynamicUser | Gent network only |
+| 127.0.0.1:8080 | llama-server (not managed by Kent) | `<op>` | host |
 
-## Groups and Memberships
+UFW (if active): `allow in on kent-gent0 to 172.30.0.1 port 3129,4000 proto tcp`, both recorded and removed on uninstall.
 
-| Group | Members | Purpose |
-|-------|---------|---------|
-| ollama | kent, litellm | Read access to Ollama Unix socket |
-| docker | {operator} only | Container management (root-equivalent, never granted to system users) |
-| agentic-logs | {operator}, promtail | Cross-service log access |
+---
 
-**Kent is explicitly NOT in the docker group.** Docker socket access is
-root-equivalent. Kent manages containers exclusively through sudoers-allowed
-spawn-gent and destroy-gent scripts.
+## 3. Paths
 
-## Privilege Escalation
+### 3.1 Code (root-owned, read-only to services)
 
-| User | Command | Via | Purpose |
-|------|---------|-----|---------|
-| kent | /usr/local/bin/spawn-gent | sudoers NOPASSWD | Create Gent stacks (Unix users, Docker containers, API keys) |
-| kent | /usr/local/bin/destroy-gent | sudoers NOPASSWD | Archive and remove Gent stacks |
+| Path | Owner | Mode | Contents |
+|---|---|---|---|
+| `/opt/kent-litellm/` | root:root | 0755 | venv (111 hash-locked packages), `lib/kent_gateway.py`, `bin/kent-litellm-start` |
+| `/opt/kent-prometheus/` | root:root | 0755 | `prometheus`, `promtool` |
+| `/opt/kent-node-exporter/` | root:root | 0755 | `node_exporter` |
+| `/opt/kent-loki/` | root:root | 0755 | `loki` |
+| `/opt/kent-gitea/` | root:root | 0755 | `gitea` |
+| `/opt/kent-core/` | root:root | 0755 | `bin/*.py` Kent tools, schemas |
+| `/opt/kent-gent/bin/kent-spawn-gent`, `kent-destroy-gent` | root:root | 0755 | root tools (sudo, §5) |
 
-Sudoers file: /etc/sudoers.d/kent-gent (mode 0440, root:root)
+### 3.2 Configuration and credentials
 
-No other privilege escalation paths exist or should be added without
-updating this document and reviewing the security implications.
+| Path | Owner | Mode | Notes |
+|---|---|---|---|
+| `/etc/kent/` | root:root | 0755 | |
+| `/etc/kent/litellm/` | root:litellm | 0750 | `config.yaml` (rendered), `litellm.env` (`FALLBACK_TIMEOUT`) |
+| `/etc/kent/litellm/credentials/` | root:root | 0700 | `operator_key`, `kent_key`, `gent_key`, `metrics_key`, `anthropic_api_key` (0600) → `LoadCredential` |
+| `/etc/kent/litellm/gent-keys/` | root:litellm | 0750 | `<id>.key` (0640), one per live Gent |
+| `/etc/kent/prometheus/` | root:prometheus | 0750 | `prometheus.yml`; `credentials/litellm_metrics_key` (0640) |
+| `/etc/kent/loki/` | root:loki | 0750 | `loki.yaml` |
+| `/etc/kent/alloy/` | root:alloy | 0750 | `config.alloy` |
+| `/etc/kent/grafana/` | root:grafana | 0750 | dashboards; `credentials/admin_password` |
+| `/etc/kent/gitea/` | root:gitea | 0750 | `app.ini` (read-only to Gitea); `credentials/` secrets via `*_URI` (0640) |
+| `/etc/kent/squid/` | root:kent-squid | 0750 | `squid.conf` |
+| `/etc/grafana/provisioning/{datasources,dashboards}/kent.yaml` | root:grafana | 0640 | provisioning (vendor dirs, Kent files) |
+| `/etc/systemd/system/kent-*.service`, `*.socket` | root:root | 0644 | Kent units |
+| `/etc/systemd/system/{alloy,grafana-server}.service.d/kent.conf` | root:root | 0644 | drop-ins (vendor units untouched) |
+| `/etc/sudoers.d/91-kent-gent` | root:root | 0440 | §5 |
 
-## Filesystem — Kent Home (/home/kent)
+### 3.3 State
 
-| Path | Owner | Mode | Created by | Read by | Write by | Notes |
-|------|-------|------|------------|---------|----------|-------|
-| /home/kent/ | kent:kent | 0755 | phase 0 | kent, operator | kent | Must be 755 for operator CLI access to venv |
-| /home/kent/venv/ | kent:kent | 0755 (dirs), o+r (files) | phase 6 | kent, operator | kent | Python venv, operator needs read+exec for kent CLI |
-| /home/kent/kent.db | kent:kent | 0600 | phase 6 | kent | kent | Estate registry, stack metadata |
-| /home/kent/stacks/ | kent:kent | 0755 | phase 0, phase 7 | kent, operator | spawn-gent (root) | Parent directory for all Gent stacks |
-| /home/kent/stacks/{id}/ | root:root | 0755 | spawn-gent | kent, gent-{id} | spawn-gent (root) | Individual stack root |
-| /home/kent/stacks/{id}/data/ | kent:kent | 0755 | spawn-gent | kent, gent-{id} | gent-{id} | Bind-mounted into container as /data |
-| /home/kent/stacks/{id}/data/stack.db | gent-{id}:gent-{id} | 0600 | spawn-gent | gent-{id}, litestream | gent-{id} | Per-Gent database |
-| /home/kent/stacks/{id}/secrets/ | root:root | 0700 | spawn-gent | root only | spawn-gent (root) | Docker secrets source directory |
-| /home/kent/stacks/{id}/secrets/gent_key.txt | root:root | 0600 | spawn-gent | Docker secrets mechanism | spawn-gent (root) | Per-Gent LiteLLM API key |
-| /home/kent/stacks/{id}/secrets/gitea_pat.txt | root:root | 0600 | spawn-gent | Docker secrets mechanism | spawn-gent (root) | Per-Gent Gitea access token |
-| /home/kent/stacks/{id}/docker-compose.yml | root:root | 0644 | spawn-gent | kent, Docker | spawn-gent (root) | Generated from template at spawn time |
-| /home/kent/stacks/{id}/litestream.yml | root:root | 0644 | spawn-gent | litestream container | spawn-gent (root) | Replication config |
-| /home/kent/stack-template/ | kent:kent | 0755 | phase 7 | kent | kent | Gitea-managed Gent template repo |
-| /home/kent/archives/ | kent:kent | 0755 | destroy-gent | kent, operator | destroy-gent (root) | Compressed archives of destroyed stacks |
-| /home/kent/replicas/ | kent:kent | 0755 | litestream | kent | litestream | Litestream DB replicas |
-| /home/kent/cron/ | kent:kent | 0755 | phase 6 | kent, cron | kent | Cron job scripts |
-| /home/kent/logs/ | kent:kent | 0755 | phase 0 | kent, operator | kent | Parent log directory |
-| /home/kent/logs/kent/ | kent:agentic-logs | 0750 | phase 0 | kent, promtail | kent | Kent agent logs |
-| /home/kent/logs/gateway/ | litellm:agentic-logs | 0750 | phase 0 | litellm, promtail | litellm | LiteLLM gateway logs |
+| Path | Owner | Mode | Kept on uninstall? |
+|---|---|---|---|
+| `/var/lib/litellm/` | litellm | 0750 | only with `--purge-state` removed |
+| `/var/lib/prometheus/`, `/var/lib/loki/`, `/var/lib/gitea/` | own account | 0750 | same |
+| `/var/lib/alloy/` | alloy | 0750 | same |
+| `/var/lib/grafana/` | grafana | 0755 | pre-existing content moved aside to `/var/lib/kent/backup/grafana/`, restored on uninstall |
+| `/var/lib/kent-squid/`, `/var/log/kent-squid/` | kent-squid | 0750 | same |
+| `/var/lib/kent-gent/` | root | 0755 | same |
+| `/var/lib/kent-gent/stacks/<id>/data/` | gent-<id>:`<op group>` | 2750 (setgid) | Gent read/write, Kent read-only |
+| `/var/lib/kent-gent/stacks/<id>/inbox/` | `<op>`:gent-<id> | 0750 | Kent writes, Gent reads (mounted read-only) |
+| `/var/lib/kent-gent/keys/<id>.key` | root:gent-<id> | 0440 | mounted read-only at `/run/kent/gent_key` |
+| `/var/lib/kent-gent/registry/` | root | 0700 | Gents `kent-destroy-gent` may remove |
+| `/var/lib/kent-gent/archive/<id>/` | root:`<op group>` | 0750 / files 0640 | retired Gents, read-only |
+| `/var/lib/kent/manifest/<module>` | root | 0644 | install records (removed with `--purge-state`) |
+| `/var/lib/kent/backup/<module>/…` | root | 0700 | moved-aside pre-existing paths |
 
-## Filesystem — Kent Secrets (/home/kent/secrets)
+### 3.4 Operator (Kent) files
 
-This directory contains the most sensitive material in the stack. Access
-is strictly compartmentalised.
+| Path | Mode | Contents |
+|---|---|---|
+| `~/.config/kent/` | 0700 | `kent.conf`; `litellm_operator_key`, `litellm_kent_key`, `gitea_kent_token`, `gitea_admin_password`, `grafana_admin_password`, `audit_hmac_secret` (all 0600) |
+| `~/.local/share/kent/` | 0700 | `kent.db` (0600), `audit/hmac_chain.log`, `digests/` |
+| `~/.local/bin/kent*` | 0755 | launchers: `kent`, `kent-audit`, `kent-digest`, `kent-poll-learnings`, `kent-qa-audit`, `kent-gent` |
+| `~/.config/systemd/user/kent-*.{service,timer}` | 0644 | 5 timers (§4) |
+| `~/.hermes/profiles/kent/` | Hermes-owned | `SOUL.md`, `skills/kent/crew-designer`, `config.yaml` (previous versions moved aside and restored on uninstall) |
 
-| Path | Owner | Mode | Read by | Contents |
-|------|-------|------|---------|----------|
-| /home/kent/secrets/ | root:root | 0700 | root only | Secrets directory (not traversable by kent) |
-| /home/kent/secrets/gateway.env | root:root | 0600 | root, litellm (via systemd EnvironmentFile) | LITELLM_ADMIN_KEY, DATABASE_URL, DEEPSEEK_API_KEY, ANTHROPIC_API_KEY |
-| /home/kent/secrets/kent_key.txt | kent:kent | 0400 | kent | Kent's scoped LiteLLM API key (router, fast, smart, frontier) |
-| /home/kent/secrets/audit_key.txt | root:root | 0600 | root | Audit-scoped key (frontier only) |
-| /home/kent/secrets/kent_gitea_pat.txt | root:root | 0600 | root | Kent's Gitea personal access token |
-| /home/kent/secrets/litellm_database_url.txt | root:root | 0600 | root | PostgreSQL connection string for LiteLLM |
+---
 
-**Design note**: kent_key.txt is the only secret kent can read directly.
-All other secrets are consumed by root-owned processes (systemd services,
-spawn scripts). This means a compromised kent process cannot extract the
-admin key, database credentials, or cloud API keys.
+## 4. Scheduled jobs (operator's systemd --user, linger enabled)
 
-**Apparent contradiction**: The secrets directory is root:root 0700, yet
-kent reads kent_key.txt. This works because kent_key.txt is kent:kent 0400
-and the file was placed there by root during install. Kent cannot list the
-directory but can read a file it owns if it knows the exact path. However,
-this depends on filesystem behaviour that varies across configurations.
-A more robust approach would be to place kent_key.txt in a kent-readable
-location outside the secrets directory (e.g. /home/kent/.kent_key).
-This is a known technical debt item.
+| Timer | Schedule | Does |
+|---|---|---|
+| `kent-poll-learnings` | every 1 min | escalation relay, learning review, template commits, circuit breaker |
+| `kent-audit-ingest` | every 5 min | gateway denials, install events, sudo commands → audit chain |
+| `kent-qa-audit` | 02:00 | nightly QA sample on frontier |
+| `kent-audit-anchor` | 04:30 | verify + anchor the audit chain in the journal |
+| `kent-digest` | 07:00 | daily digest |
 
-## Filesystem — Hermes (/home/kent/.hermes)
+---
 
-| Path | Owner | Mode | Read by | Write by | Notes |
-|------|-------|------|---------|----------|-------|
-| /home/kent/.hermes/ | kent:kent | 0755 | kent | kent | Hermes agent home |
-| /home/kent/.hermes/config.yaml | kent:kent | 0644 | kent | kent | Hermes configuration |
-| /home/kent/.hermes/SOUL.md | kent:kent | 0644 | kent | install (root, chowned) | Kent personality and capabilities |
-| /home/kent/.hermes/.env | kent:kent | 0600 | kent | install (root, chowned) | Hermes environment (API key for LiteLLM) |
-| /home/kent/.hermes/skills/ | kent:kent | 0755 | kent | install (root, chowned) | Hermes skill directory (auto-discovered) |
-| /home/kent/.hermes/skills/kent/crew-designer/ | kent:kent | 0755 | kent | install (root, chowned) | Crew designer skill and templates |
+## 5. Privileged actions
 
-## Filesystem — LiteLLM (/home/litellm, /etc/litellm)
+| Who | May run as root | Constraint |
+|---|---|---|
+| `<op>` (and Kent, as `<op>`) | `/opt/kent-gent/bin/kent-spawn-gent`, `/opt/kent-gent/bin/kent-destroy-gent` (NOPASSWD, `/etc/sudoers.d/91-kent-gent`) | root-owned tools; stack id must be 8 hex; project files read with `O_NOFOLLOW`, regular files only, 256 KiB max; destroy only touches Gents in the root-only registry |
+| `<op>` | the module installers/uninstallers | normal sudo with password (a time-limited development grant, `install/dev/agent-sudo.sh`, exists for unattended build/test runs and expires automatically) |
 
-| Path | Owner | Mode | Read by | Write by | Notes |
-|------|-------|------|---------|----------|-------|
-| /home/litellm/ | litellm:litellm | 0755 | litellm | litellm | LiteLLM home and venv |
-| /etc/litellm/ | root:litellm | 0755 | root, litellm | install (root) | Configuration directory |
-| /etc/litellm/config.yaml | root:litellm | 0640 | root, litellm | install (root) | Active model routing config |
+Every sudo command is recorded by sudo in the journal and ingested into Kent's audit chain.
 
-## Filesystem — Ollama
+---
 
-| Path | Owner | Mode | Read by | Write by | Notes |
-|------|-------|------|---------|----------|-------|
-| /usr/share/ollama/ | ollama:ollama | 0755 | ollama | ollama | Ollama home, model storage |
-| /run/ollama/ollama.sock | ollama:ollama | 0660 | ollama group (kent, litellm) | ollama | Unix domain socket for inference |
+## 6. Gent container
 
-## Filesystem — System Configuration
-
-| Path | Owner | Mode | Read by | Write by | Notes |
-|------|-------|------|---------|----------|-------|
-| /etc/kent/kent.conf | root:root | 0644 | all (runtime config) | install (root) | Paths, ports, exported env vars |
-| /etc/sudoers.d/kent-gent | root:root | 0440 | sudo | install (root) | Kent spawn/destroy privileges |
-| /etc/cron.d/kent | root:root | 0644 | cron | install (root) | Scheduled jobs (digest, telemetry, QA) |
-| /etc/squid/squid.conf | root:root | 0644 | squid | install (root) | Egress proxy whitelist |
-
-## Filesystem — Observability
-
-| Path | Owner | Mode | Read by | Write by | Notes |
-|------|-------|------|---------|----------|-------|
-| /var/lib/prometheus/ | prometheus:prometheus | 0755 | prometheus | prometheus | Metrics TSDB |
-| /var/lib/loki/ | loki:loki | 0755 | loki | loki | Log storage |
-| /var/log/squid/ | proxy:agentic-logs | 0750 | squid, promtail | squid | Egress proxy logs |
-
-## Container Security — Gent Stacks
-
-Each Gent runs in a Docker container with the following security posture:
-
-| Control | Setting | Notes |
-|---------|---------|-------|
-| Filesystem | read_only: true | Entire rootfs is immutable |
-| Capabilities | cap_drop: ALL | No Linux capabilities |
-| Privilege escalation | no-new-privileges | Cannot gain capabilities via setuid/setgid |
-| Writable paths | /tmp (100M tmpfs) | General temp storage |
-| | /app/.local (50M tmpfs, uid=999) | Python/ChromaDB data directory |
-| | /app/.cache (50M tmpfs, uid=999) | Python package cache |
-| | /app/.config (10M tmpfs, uid=999) | Application config |
-| | /data (bind mount) | Stack database and working files |
-| Secrets | /run/secrets/gent_key (Docker secrets) | LiteLLM API key (read-only) |
-| | /run/secrets/gitea_pat (Docker secrets) | Gitea access token (read-only) |
-| Network | kent-gent-net (172.30.0.0/24) | Isolated bridge network |
-| Egress | HTTP_PROXY/HTTPS_PROXY → Squid (3128) | All outbound traffic proxied and whitelisted |
-| Container user | gent (uid=999, gid=999) | Non-root, no shell |
-
-**UID isolation**: The gent user (UID 999) exists only inside each
-container's user namespace. Every Gent container has its own independent
-UID 999 — there are no collisions between containers or with the host.
-The host-side per-Gent users (gent-{id}) have unique UIDs assigned by
-the host's useradd and own the bind-mounted /data directories. The tmpfs
-uid=999 settings are container-internal only.
-
-**User namespace remapping**: If Docker userns-remap is ever enabled,
-the internal UID 999 gets remapped to a different host UID. The
-bind-mount ownership on /data would need to match the remapped UID.
-userns-remap is not currently configured.
-
-**Container isolation**: Gent containers cannot see each other's data
-volumes, cannot access the host filesystem outside their bind mount,
-and cannot make network requests that bypass the egress proxy.
-
-## Network Topology
-
-All services bind to localhost only. No service is directly reachable
-from the network. The only external exposure is through the operator's
-SSH session.
-
-| Service | Bind address | Port | Protocol | Accessed by |
-|---------|-------------|------|----------|-------------|
-| Ollama | 127.0.0.1 (+ Unix socket) | 11434 | HTTP | LiteLLM |
-| LiteLLM Gateway | 127.0.0.1 | 4000 | HTTP | Kent, operator, Gents (via Docker bridge) |
-| Hermes Gateway | 127.0.0.1 | 8642 | HTTP | Operator (via kent CLI) |
-| PostgreSQL | 127.0.0.1 | 5432 | PostgreSQL | LiteLLM |
-| Gitea | 127.0.0.1 | 3000 | HTTP | Kent, Gents (via Docker bridge) |
-| Grafana | 127.0.0.1 | 3001 | HTTP | Operator |
-| Prometheus | 127.0.0.1 | 9090 | HTTP | Grafana |
-| Loki | 127.0.0.1 | 3100 | HTTP | Promtail, Grafana |
-| Squid (egress proxy) | 127.0.0.1 | 3128 | HTTP | Gent containers (via Docker bridge) |
-| Node Exporter | 127.0.0.1 | 9100 | HTTP | Prometheus |
-| Promtail | 127.0.0.1 | 9080 | HTTP | (push to Loki) |
-
-### Docker Bridge Network
-
-Gent containers reach host services via the Docker bridge gateway
-at 172.30.0.1. This is the only route from container to host.
-
-| From container | To host service | Via |
-|----------------|----------------|-----|
-| Gent CEO | LiteLLM Gateway | http://172.30.0.1:4000 |
-| Gent CEO | Gitea | http://172.30.0.1:3000 |
-| Gent CEO | Internet (whitelisted) | http://172.30.0.1:3128 (Squid) |
-
-## Access Pattern Summary
-
-This matrix shows which user can access which resource category.
-
-| Resource | root | kent | litellm | gent-{id} | operator |
-|----------|------|------|---------|-----------|----------|
-| Admin API key | ✓ | ✗ | ✓ (env) | ✗ | ✗ |
-| Kent API key | ✓ | ✓ | ✗ | ✗ | ✗ |
-| Gent API key | ✓ | ✗ | ✗ | ✓ (secret) | ✗ |
-| Cloud API keys | ✓ | ✗ | ✓ (env) | ✗ | ✗ |
-| Kent database | ✓ | ✓ | ✗ | ✗ | ✗ |
-| Gent database | ✓ | ✗ | ✗ | ✓ | ✗ |
-| Docker socket | ✓ | ✗ | ✗ | ✗ | ✓ |
-| Ollama socket | ✓ | ✓ | ✓ | ✗ | ✗ |
-| LiteLLM config | ✓ | ✗ | ✓ | ✗ | ✗ |
-| Hermes config | ✓ | ✓ | ✗ | ✗ | ✗ |
-| Skills | ✓ | ✓ | ✗ | ✗ | ✗ |
-| Spawn containers | ✓ | ✓ (sudo) | ✗ | ✗ | ✓ |
-| Destroy containers | ✓ | ✓ (sudo) | ✗ | ✗ | ✓ |
-| Observability data | ✓ | ✗ | ✗ | ✗ | ✓ (Grafana) |
-
-## Blast Radius Analysis
-
-If a process is compromised, what can the attacker reach?
-
-| Compromised process | Direct access | Escalation path | Blast radius |
-|---------------------|---------------|-----------------|--------------|
-| Kent (hermes) | kent.db, skills, kent_key.txt, Ollama socket | sudo spawn/destroy-gent | Can create/destroy Gent stacks, consume inference tokens on all tiers. Cannot read admin key, cloud keys, other Gents' data, or Docker socket. |
-| LiteLLM | Model routing config, admin key, cloud API keys, PostgreSQL | None | Can proxy inference to any model, read/revoke API keys. Cannot access Kent's data, Gent data, or Docker. |
-| Gent container | Own stack.db, own API key (fast/smart only), egress via proxy | None (all caps dropped, read-only fs) | Can consume inference tokens on fast/smart tiers. Cannot reach other Gents, Kent's data, or the host filesystem. |
-| Operator session | Docker socket (root-equivalent), all Grafana data | sudo to root | Full system access. This is by design: the operator is the principal. |
-
-## Known Technical Debt
-
-1. **kent_key.txt in root-owned directory**: Kent owns the file but it
-   lives inside /home/kent/secrets/ which is root:root 0700. This works
-   on ext4 (file ownership checked, not directory traversal for known
-   paths) but is fragile. Consider moving to /home/kent/.kent_key.
-
-2. **Container UID pinned to 999**: The Dockerfile explicitly assigns
-   UID/GID 999 to the gent user (`useradd -r -u 999`). The
-   docker-compose template references this in tmpfs mounts. If either
-   value changes, both files must be updated together.
-
-3. **Squid whitelist is static**: The egress proxy whitelist is set at
-   install time. If a Gent needs access to a new domain, the operator
-   must manually update squid.conf and reload. Consider a mechanism
-   for per-Gent egress rules.
-
-## Validation
-
-Phase 8 (E2E) should verify every entry in this map. Proposed test gates:
-
-```bash
-# Ownership checks
-test_gate "kent.db owned by kent" "stat -c '%U:%G' '$KENT_DB' | grep -q 'kent:kent'"
-test_gate "secrets dir root-only" "stat -c '%a' '$SECRETS_DIR' | grep -q '700'"
-test_gate "gateway.env root-only" "stat -c '%U:%a' '$SECRETS_DIR/gateway.env' | grep -q 'root:600'"
-test_gate "kent_key readable by kent" "sudo -u kent test -r '$SECRETS_DIR/kent_key.txt'"
-test_gate "kent cannot read gateway.env" "! sudo -u kent test -r '$SECRETS_DIR/gateway.env'"
-test_gate "kent not in docker group" "! id -nG kent | grep -qw docker"
-test_gate "sudoers exists" "test -f /etc/sudoers.d/kent-gent"
-test_gate "stacks owned by kent" "stat -c '%U:%G' '$STACKS_DIR' | grep -q 'kent:kent'"
-```
+| Property | Value |
+|---|---|
+| User | `gent-<id>` uid:gid |
+| Filesystem | read-only rootfs; tmpfs `/tmp` (256 MB, nosuid, nodev); `/data` (read/write, own stack); `/inbox` (read-only); `/run/kent/gent_key` (read-only) |
+| Privileges | `--cap-drop ALL`, `no-new-privileges`, `--init` |
+| Limits | 2 GB memory, 2 CPUs, 256 pids; restart on failure ×3 |
+| Network | `kent-gent-net` (internal); reaches only 172.30.0.1:4000 (gateway) and :3129 (proxy) |
+| Logs | journald, tag `kent-gent-<id>` |

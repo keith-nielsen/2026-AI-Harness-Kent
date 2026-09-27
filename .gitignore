@@ -30,7 +30,7 @@ Thumbs.db
 .idea/
 *.sublime-*
 
-# Secrets (templates exist in configs/env-templates.md)
+# Secrets (never committed; services read them from /etc/kent/<service>/credentials)
 .env
 **/secrets/*.txt
 **/secrets/*.env
@@ -60,6 +60,5 @@ docker-compose.override.yml
 *.gguf
 *.safetensors
 *.bin
-!templates/requirements.txt
 # Claude Code personal settings (machine-specific permissions)
 .claude/settings.local.json

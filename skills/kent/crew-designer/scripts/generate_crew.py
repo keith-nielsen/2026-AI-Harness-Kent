@@ -3,7 +3,8 @@
 Kent — Crew Configuration Generator
 
 Takes a template name and a JSON customisation blob, produces deployment-ready
-agents.yaml + tasks.yaml + crew_config.json in the output directory.
+project.yaml + agents.yaml + tasks.yaml + crew_config.json in the output directory,
+ready for `kent-gent spawn --name NAME --project <output-dir>`.
 
 The customisations JSON replaces {placeholder} tokens in the template YAML
 and can override agent-level fields (goal, backstory, tier).
@@ -192,8 +193,14 @@ def write_output(
     tasks: dict,
     config: dict,
 ):
-    """Write agents.yaml, tasks.yaml, and crew_config.json to the output dir."""
+    """Write project.yaml, agents.yaml, tasks.yaml and crew_config.json to the output dir."""
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # project.yaml is what kent-gent spawn requires; limits keep local-model runs short.
+    with open(output_dir / "project.yaml", "w") as f:
+        yaml.dump({"name": config["project_name"], "goal": config.get("goal") or config["project_name"],
+                   "limits": {"max_iter": 6, "max_tokens": 1500}},
+                  f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     agents_path = output_dir / "agents.yaml"
     tasks_path = output_dir / "tasks.yaml"
@@ -221,6 +228,7 @@ def main():
     parser.add_argument("--template", required=True, help="Template name (research, content, analysis)")
     parser.add_argument("--output-dir", required=True, help="Directory to write generated configs")
     parser.add_argument("--project-name", required=True, help="Human-readable project name")
+    parser.add_argument("--goal", default="", help="One or two sentences: the deliverable and who uses it")
     parser.add_argument("--customisations", default="{}", help="JSON string of customisation parameters")
     parser.add_argument("--process", default=None, help="Override process type (sequential or hierarchical)")
     parser.add_argument("--dry-run", action="store_true", help="Validate only, don't write files")
@@ -279,6 +287,7 @@ def main():
     # Build config metadata
     config = {
         "project_name": args.project_name,
+        "goal": args.goal,
         "template": args.template,
         "process": process,
         "tier_map": tier_map,
@@ -293,6 +302,7 @@ def main():
     agents_path, tasks_path, config_path = write_output(output_dir, agents, tasks, config)
 
     print(f"Crew configuration generated:")
+    print(f"  {output_dir / 'project.yaml'}")
     print(f"  {agents_path}")
     print(f"  {tasks_path}")
     print(f"  {config_path}")

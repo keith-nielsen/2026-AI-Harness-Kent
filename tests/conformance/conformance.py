@@ -170,9 +170,12 @@ def check_kent_core() -> None:
         rec("INFO", "§18 audit", "earlier chains in the journal (reinstalls)", note[6:120])
     anchors = sh("journalctl", "-t", "kent-audit-anchor", "--no-pager", "-o", "cat", "-n", "1")
     ok("count=" in anchors, "§18 audit", "chain anchored in the journal", anchors[:60])
-    timers = sh("systemctl", "--user", "list-timers", "--no-legend", "kent-*")
     for t in ("kent-audit-ingest", "kent-poll-learnings", "kent-digest", "kent-qa-audit", "kent-audit-anchor"):
-        ok(t + ".timer" in timers, "§7.2 Kent duties", f"{t}.timer scheduled")
+        # A listed timer can still be dormant (no next elapse); require a scheduled next run.
+        nxt = sh("systemctl", "--user", "show", f"{t}.timer", "-p", "NextElapseUSecRealtime", "--value")
+        running = sh("systemctl", "--user", "is-active", f"{t}.service") == "active"
+        armed = bool(re.search(r"\d", nxt)) or running
+        ok(armed, "§7.2 Kent duties", f"{t}.timer armed (next run scheduled)", "running now" if running else (nxt or "none"))
     conf = (CFG / "kent.conf").read_text()
     ok("STACKS_DIR=/var/lib/kent-gent/stacks" in conf, "§9 data", "kent.conf points at Gent stacks")
     for f in ("litellm_kent_key", "litellm_operator_key", "gitea_kent_token", "audit_hmac_secret", "grafana_admin_password"):

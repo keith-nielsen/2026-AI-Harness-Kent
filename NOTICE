@@ -27,13 +27,17 @@ The MIT License text for Hermes Agent is reproduced below:
     TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-This product also uses the following open-source components:
+This product installs, configures or uses the following open-source components
+(they are not bundled in this repository):
 
-  CrewAI (https://github.com/crewai/crewai) — MIT License
+  Hermes Agent (https://github.com/NousResearch/hermes-agent) — MIT License
+  CrewAI (https://github.com/crewAIInc/crewAI) — MIT License
   LiteLLM (https://github.com/BerriAI/litellm) — MIT License
-  Ollama (https://github.com/ollama/ollama) — MIT License
-  Grafana (https://github.com/grafana/grafana) — AGPL-3.0 License
+  llama.cpp (https://github.com/ggml-org/llama.cpp) — MIT License
   Prometheus (https://github.com/prometheus/prometheus) — Apache 2.0 License
+  node_exporter (https://github.com/prometheus/node_exporter) — Apache 2.0 License
   Loki (https://github.com/grafana/loki) — AGPL-3.0 License
+  Grafana Alloy (https://github.com/grafana/alloy) — Apache 2.0 License
+  Grafana (https://github.com/grafana/grafana) — AGPL-3.0 License
   Gitea (https://github.com/go-gitea/gitea) — MIT License
   Squid (http://www.squid-cache.org/) — GPL-2.0 License
