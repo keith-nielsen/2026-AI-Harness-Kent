@@ -11,6 +11,9 @@
 #   - --dry-run prints every privileged action instead of running it.
 # =============================================================================
 set -euo pipefail
+# Traced runs (uninstall.sh --trace): bash running as root does not import PS4 from the
+# environment, so set the timestamped script:line prefix here.
+if [[ -o xtrace ]]; then PS4='+ $(date +%H:%M:%S.%3N) ${BASH_SOURCE[0]##*/}:${LINENO}: '; fi
 
 # Installer bookkeeping lives apart from Kent's own home (/var/lib/kent belongs to the kent
 # account), like dpkg's /var/lib/dpkg: manifests and moved-aside originals, root-only.
