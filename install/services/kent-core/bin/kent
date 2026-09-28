@@ -10,19 +10,25 @@
   kent gent <status|logs|wait|assess|pause|resume|restart|destroy> ID [...]
   kent gent export ID [DEST]    copy a Gent's deliverables into DEST (default ./gent-ID), owned by you
   kent new DIR [--name NAME]    start a Gent from DIR/project.yaml, agents.yaml, tasks.yaml
+  kent llama <start|stop|restart|status>   the local model server (on demand)
 
 Kent runs under its own account; this command talks to it through one fixed, audited entry
 point (sudo -u kent kent-exec). Your files are read and written by you, never by Kent.
+`kent llama` goes to systemd directly (polkit lets kent-operators start/stop that one unit).
 """
 import grp
 import io
+import json
 import os
+import pwd
 import subprocess
 import sys
 import tarfile
+import urllib.request
 from pathlib import Path
 
 EXEC = "/opt/kent-core/libexec/kent-exec"
+LLAMA_UNIT = "kent-llama.service"
 PROJECT_FILES = ("project.yaml", "agents.yaml", "tasks.yaml")
 MAX_FILE = 256 * 1024
 
@@ -78,6 +84,30 @@ def export(sid: str, dest: Path) -> int:
     return 0
 
 
+def llama(action: str) -> int:
+    """Start/stop the local model server as yourself: no sudo, the polkit rule authorises it."""
+    if action == "status":
+        state = subprocess.run(["systemctl", "is-active", LLAMA_UNIT], capture_output=True, text=True).stdout.strip()
+        model = ""
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8080/v1/models", timeout=5) as r:
+                model = json.load(r)["data"][0]["id"]
+        except Exception:  # noqa: BLE001 - not serving is a normal state here
+            pass
+        print(f"local model server: {state or 'unknown'}" + (f", serving '{model}' on 127.0.0.1:8080" if model else ""))
+        return 0 if state == "active" else 3
+    if action not in ("start", "stop", "restart"):
+        die("usage: kent llama <start|stop|restart|status>", 2)
+    user = pwd.getpwuid(os.getuid()).pw_name   # the real caller, not $USER
+    subprocess.run(["logger", "-t", "kent-llama", "--", f"human:{user} {action}"], check=False)
+    if action != "stop":
+        print("verifying model hashes and loading the model (about 1-2 minutes)...", flush=True)
+    rc = subprocess.run(["systemctl", "--no-ask-password", action, LLAMA_UNIT]).returncode
+    if rc != 0:
+        die(f"{action} failed; see: journalctl -u {LLAMA_UNIT} -n 50", rc)
+    return llama("status") if action != "stop" else 0
+
+
 def main(argv: list[str]) -> int:
     if argv[:1] in (["-h"], ["--help"], ["help"]):
         print(__doc__.strip()); return 0
@@ -97,6 +127,8 @@ def main(argv: list[str]) -> int:
         src = Path(argv[1]).expanduser().resolve()
         name = argv[argv.index("--name") + 1] if "--name" in argv else src.name
         return kexec("new", "--name", name, stdin=pack_project(src))
+    if cmd == "llama":
+        return llama(argv[1] if len(argv) > 1 else "status")
     if cmd == "gent":
         if len(argv) < 3:
             die("usage: kent gent <action> ID [...]", 2)

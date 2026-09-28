@@ -3,7 +3,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/Architecture-v3.1.0-green)](docs/architecture.md)
 [![Status](https://img.shields.io/badge/Status-v0.1.0--rc-orange)](https://github.com/keith-nielsen/2026-AI-Harness-Kent/releases)
-[![Conformance](https://img.shields.io/badge/Conformance-99%20pass%20%2F%200%20fail-brightgreen)](docs/conformance.md)
+[![Conformance](https://img.shields.io/badge/Conformance-139%20pass%20%2F%200%20fail-brightgreen)](docs/conformance.md)
 [![Validate](https://github.com/keith-nielsen/2026-AI-Harness-Kent/actions/workflows/validate.yml/badge.svg)](.github/workflows/validate.yml)
 
 **A reference template for a well-designed, fully integrated, self-hosted agentic
@@ -51,7 +51,7 @@ Operator ── `kent` command (as themselves; kent-operators group)
 | Component | Version | Runs as |
 |---|---|---|
 | LiteLLM gateway | 1.100.1 | `litellm` |
-| Local model | llama.cpp `llama-server` (Qwen3.6-35B-A3B on the reference machine) | operator |
+| Local model | llama.cpp `llama-server` (Qwen3.6-35B-A3B on the reference machine), on demand: `kent llama start` | `kent-llama` |
 | Frontier / smart | Claude Opus 5.5 (`claude-opus-5-5`) | via gateway |
 | Agent harness | Hermes Agent v0.21.5 (tag v2026.9.24, commit-pinned, own install) | `kent` |
 | Web search | SearXNG 2026.7.7 (digest-pinned container) | container, no capabilities |
@@ -72,19 +72,20 @@ Operator ── `kent` command (as themselves; kent-operators group)
 - **Controls with evidence:** a control matrix mapped to ISO 27001, SOC 2,
   NIST 800-53, HIPAA and PCI DSS requirement areas ([`controls.md`](docs/controls.md)).
 - **Formal validation:** installation, operational and performance qualification
-  (IQ/OQ/PQ) evidence: 99-check conformance run, 260 automated tests plus 24 in-container checks, end-to-end
+  (IQ/OQ/PQ) evidence: 139-check conformance run, 280 automated tests plus 24 in-container checks, end-to-end
   simulation, and verified rollback to the pre-install state.
 - **Reversible by construction:** every module records what it creates; uninstall
   removes exactly that.
 
 ## Quick start
 
-Requirements: Ubuntu 24.04 with Docker, and a llama.cpp server (OpenAI-compatible)
-on `127.0.0.1:8080`. Kent brings its own Hermes; an existing personal Hermes is not
+Requirements: Ubuntu 24.04 with Docker, an NVIDIA GPU, and a llama.cpp build
+(`--llama-build <llama.cpp>/build/bin` on the first install; Kent runs a root-owned copy
+as the `kent-llama` service on `127.0.0.1:8080`). Kent brings its own Hermes; an existing personal Hermes is not
 touched. Details in [`docs/dev-notes.md`](docs/dev-notes.md).
 
 ```bash
-sudo ./install.sh                  # preflight, 11 modules, each verifies itself (--profile hardened for deployment)
+sudo ./install.sh                  # preflight, 12 modules, each verifies itself (--profile hardened for deployment)
 newgrp kent-operators              # or log out and in: the installer made you a Kent operator
 kent                               # talk to Kent;  kent --help for the rest
 sudo ./kent-admin conformance      # expect 0 FAIL

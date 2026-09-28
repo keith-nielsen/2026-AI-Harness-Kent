@@ -9,6 +9,11 @@
 #                                             prod = smart/frontier on Claude (needs the key)
 #   sudo ./kent-admin set-anthropic-key       store the Anthropic key for the gateway (prompted,
 #                                             hidden; kept in /etc/kent/litellm/credentials, root 0600)
+#   sudo ./kent-admin llama set KEY=VALUE     local model server setting (MODEL_SET, CTX, UB, NCMOE,
+#                                             THINK, ALIAS, PIN, CORES, TUNE); operators then run
+#                                             `kent llama restart`
+#   sudo ./kent-admin models rehash           after adding or replacing a model file: re-apply
+#                                             root:kent-models 0440 and re-record SHA-256 hashes
 #   sudo ./kent-admin conformance             run the conformance suite
 #
 # Every change goes through the module installers, so it is recorded in their manifests and
@@ -40,7 +45,7 @@ case "$cmd" in
         echo "operators      $(getent group kent-operators | cut -d: -f4 | tr ',' ' ')"
         echo "services:"
         for u in kent-litellm kent-prometheus kent-node-exporter kent-loki alloy grafana-server kent-gitea \
-                 kent-searxng kent-squid kent-gent-egress.socket kent-gent-gateway.socket kent-gent-search.socket; do
+                 kent-searxng kent-llama kent-squid kent-gent-egress.socket kent-gent-gateway.socket kent-gent-search.socket; do
             printf '  %-26s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
         done
         echo "timers:"
@@ -63,6 +68,14 @@ case "$cmd" in
     set-anthropic-key)
         "$SVC/litellm/install.sh" --set-anthropic-key
         [[ "$(current_config)" == prod ]] || echo "The gateway is on dev; to route smart/frontier to Claude: sudo ./kent-admin config prod"
+        ;;
+    llama)
+        [[ "${1:-}" == set && -n "${2:-}" ]] || { echo "usage: kent-admin llama set KEY=VALUE" >&2; exit 2; }
+        "$SVC/llama/install.sh" --set "$2"
+        ;;
+    models)
+        [[ "${1:-}" == rehash ]] || { echo "usage: kent-admin models rehash" >&2; exit 2; }
+        "$SVC/llama/install.sh" --rehash
         ;;
     conformance)
         exec python3 "$ROOT/tests/conformance/conformance.py" "$@"

@@ -1,0 +1,13 @@
+# /etc/systemd/system/srv-kent-models.mount
+# Read-only view of the model directory for the local model server (kent-llama.service).
+# Installed by install/services/llama/install.sh. Started on demand with kent-llama.service; needs
+# the source filesystem to be mounted (systemd orders it after the mount holding @SRC@).
+
+[Unit]
+Description=Kent model directory, read-only (@SRC@)
+
+[Mount]
+What=@SRC@
+Where=/srv/kent/models
+Type=none
+Options=bind,ro,nodev,nosuid,noexec

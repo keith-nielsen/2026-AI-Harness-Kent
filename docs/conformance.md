@@ -7,10 +7,10 @@ and move items between **Open** and **Closed**.
 
 | | |
 |---|---|
-| Last assessed | 2026-09-28, v0.1.0-rc.2 (reference machine: Ubuntu 24.04, RTX 2060 SUPER 8 GB, 64 GB RAM) |
-| Automated check | `python3 tests/conformance/conformance.py [--markdown FILE]` (operator, no root, read-only) |
-| Result | **99 PASS · 0 FAIL · 6 INFO** |
-| Test suites | 214 unit (gateway 145, kent_core 42, Gent CEO 12, install 15) · 46 live (`tests/live`) · 24 in-container Gent checks (`tests/gent/run_tools_selftest.sh`) · router probe |
+| Last assessed | 2026-09-29, v0.1.0-rc.3 + llama module (architecture 3.2.0; reference machine: Ubuntu 24.04, RTX 2060 SUPER 8 GB, 64 GB RAM) |
+| Automated check | `sudo ./kent-admin conformance [--markdown FILE]` (root, read-only) |
+| Result | **139 PASS · 0 FAIL · 13 INFO** |
+| Test suites | 234 unit (gateway 145, kent_core 42, Gent CEO 12, install 31, sim 4) · 46 live (`tests/live`) · 24 in-container Gent checks (`tests/gent/run_tools_selftest.sh`) · router probe |
 | Manual validation | [`manual-validation.md`](manual-validation.md): operator runbook with prompts, commands, telemetry queries, expected outputs and a sign-off table |
 | Control matrix | [`controls.md`](controls.md): each enterprise control with evidence, status and framework mapping |
 | Rollback | Full purge-uninstall of all modules returns the host to the pre-install baseline (only non-Kent differences remain) |
@@ -25,7 +25,7 @@ design *with these amendments*; `architecture.md` itself will be revised to matc
 
 | Topic | Original design (v2.3) | Decision (operator), now in architecture v3.0.0 |
 |---|---|---|
-| Inference engine | Ollama on a Unix socket | Ollama dropped. Local model = operator-run `llama-server` (llama.cpp) on 127.0.0.1:8080; not yet a managed service |
+| Inference engine | Ollama on a Unix socket | Ollama dropped. Local model = llama.cpp `llama-server` as the on-demand `kent-llama` service on 127.0.0.1:8080 (own account; models root:kent-models 0440 behind a read-only mount, hash-checked at each start; operators start/stop it via polkit) — v0.1.0-rc.4 |
 | Cloud model | DeepSeek + Anthropic | Claude only: smart and frontier → Claude Opus 5.5 (`claude-opus-5-5`) in prod; no DeepSeek |
 | Local-first | ~95% local | End-state for later; cloud intelligence does the heavy lifting for now |
 | Tier access | Gent CEO: fast + smart | Gents are **local-only** (router, fast). Anything harder is escalated to Kent |
@@ -129,9 +129,8 @@ Found by the simulation (S), rollback test (R) and conformance pass (G). All fix
 | Regulated-data gaps | Redaction/DLP before cloud calls, encryption at rest, backups/DR, off-host immutable logs, MFA/SSO: see [`controls.md`](controls.md) "Gaps before regulated data" |
 | Firewall, AIDE, pip-audit/trivy, `chattr +a` | Deferred hardening |
 | Layer-3 prompt-injection tests against Kent | Deferred while the agent sudo grant is active |
-| Full conformance run on the kent-account layout (3.1.0) | Deferred by the operator. Module self-verification, non-root conformance checks and 215 unit tests pass; `kent-admin conformance` and the manual runbook (reference answers K1–K6) to be re-run and recorded |
+| Manual runbook on the kent-account layout (3.1.0+) | Automated conformance done 2026-09-29 (139/0/13); the manual runbook (reference answers K1–K6) is still to be re-run and recorded |
 | Hardened profile | Policy written and rendered (install-verified: tirith fails closed); not yet exercised in use |
-| llama.cpp as a managed service | Deferred by decision |
 
 ---
 
@@ -159,5 +158,6 @@ Rollback test: `install/services/snapshot.sh take <name>` → `sudo ./uninstall.
 | 2026-09-28 | Simulated external security review against CSA Guidelines on Securing AI Systems (2024), Securing Agentic AI Addendum (2026) and CCoP 2026: see `audit/`. Findings open |
 | 2026-09-28 | v0.1.0-rc.2: legacy installer and configs retired; docs rewritten for the live harness; control matrix and manual validation runbook added (runbook executed end to end on the reference machine, outputs recorded in it); findings R5 and R6 fixed; 99 PASS / 0 FAIL / 6 INFO; 214 unit + 46 live tests |
 | 2026-09-28 | v0.1.0-rc.3: Kent's own account and pinned Hermes (architecture 3.1.0), SearXNG, root install/uninstall/kent-admin, conformance ported with new checks (incl. keyless web fallback off); sim-routed gateway flavour; failure causes logged; Kent routing dashboard. 220 unit tests pass; **conformance not yet re-run for rc.3** (last full run: rc.2) |
+| 2026-09-29 | Conformance re-run on the 3.1.0 layout plus the new llama module (architecture 3.2.0): **139 PASS / 0 FAIL / 13 INFO**. llama.cpp is now the on-demand `kent-llama` service (own account; models root:kent-models 0440 behind a read-only, hash-checked mount; polkit start/stop for operators), closing the "managed service" open item and addressing F-09. `uninstall.sh` gains `--log`/`--trace` for the full-uninstall evidence run. Two check fixes: the timer-armed check accepted only `active` while a oneshot job runs as `activating` (false FAIL for the every-minute poller); the SearXNG check now retries and names engines that upstream rate limits have suspended. 234 unit tests |
 | 2026-09-28 | Architecture 3.1.0 implemented (uncommitted at time of writing): `kent` account and pinned Hermes, `kent` command + `kent-exec`, system timers, Gent brokers incl. `kent-gent-ctl`, SearXNG module and Gent search bridge, lab/hardened profiles, `install.sh` / `uninstall.sh` / `kent-admin`, conformance check ported. Full conformance run deferred |
 | 2026-09-28 | tirith 0.4.2 pinned (SHA-256; release signature checked) and enforced through Kent's managed scope; Kent's SearXNG runs as the new `kent-searxng` account instead of root (fixes the uid/gid 977 overlap with the image's internal user); operator's personal SearXNG container retired |

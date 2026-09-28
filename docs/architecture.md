@@ -1,12 +1,25 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.1.0
-date: 2026-09-28
+version: 3.2.0
+date: 2026-09-29
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.0
+    date: 2026-09-29
+    summary: >
+      The local model becomes a managed service: llama-server runs on demand as
+      kent-llama.service under its own no-login kent-llama account (no sudo),
+      from a root-owned copy of the build in /opt/kent-llama. Models are
+      root:kent-models (directory 0750, files 0440), reached only through a
+      read-only bind mount (/srv/kent/models, ro,nodev,nosuid,noexec), and each
+      is SHA-256-checked against an install-time record before every load. A
+      polkit rule lets kent-operators start/stop/restart that one unit
+      (`kent llama`, audited); a root oneshot applies and restores the CPU tuning
+      (SMT, boost). Addresses audit finding F-09 (model file permissions and
+      integrity).
   - version: 3.1.0
     date: 2026-09-28
     summary: >
@@ -200,10 +213,18 @@ application code changes: every consumer uses logical names.
 
 ### 2.4 Local Model
 
-The local model is a `llama-server` (llama.cpp) the operator starts
-(e.g. `~/.local/bin/llamaserver-qwen36-optimum.sh`), serving one model under the
-alias `locally-run-model` at `http://127.0.0.1:8080/v1`. It is not yet a managed
-service (Planned: own account and unit, like the other services).
+The local model is llama.cpp's `llama-server`, run on demand as `kent-llama.service`
+(llama module) and serving one model under the alias `locally-run-model` at
+`http://127.0.0.1:8080/v1`. Operators start and stop it with `kent llama start|stop`
+(a polkit rule allows exactly that unit and those verbs to `kent-operators`; the `kent`
+account cannot). It runs as `kent-llama` from a root-owned copy of the build in
+`/opt/kent-llama`, with settings in `/etc/kent/llama/llama.env` (the measured optimum:
+Qwen3.6-35B-A3B MTP, 256k context, `-ncmoe 40`, non-thinking; change with
+`kent-admin llama set`). The models are `root:kent-models` (0750/0440), read through a
+read-only bind mount at `/srv/kent/models` (`ro,nodev,nosuid,noexec`), and each start
+refuses a model whose SHA-256 differs from the install-time record
+(`/etc/kent/llama/models.sha256`; `kent-admin models rehash` after adding one). SMT and
+CPU boost are switched off by a root oneshot while the server runs and restored after.
 
 ### 2.5 Reference Hardware
 
@@ -569,7 +590,7 @@ Planned: key rotation, container image scanning.
 
 | Account | Created by | Runs |
 |---|---|---|
-| operator (e.g. `administrator`), in `kent-operators` | — | the `kent` command, llama-server |
+| operator (e.g. `administrator`), in `kent-operators` and `kent-models` | — | the `kent` command (incl. `kent llama start\|stop`) |
 | `kent` | hermes module | Kent (its own Hermes), Kent's 5 system timers |
 | `litellm` | litellm module | gateway |
 | `prometheus`, `node_exporter`, `loki` | their modules | metrics and logs |
@@ -578,6 +599,7 @@ Planned: key rotation, container image scanning.
 | `gitea` | gitea module | forge |
 | `kent-squid` | gent module | Gent egress proxy |
 | `kent-searxng` | searxng module | SearXNG container (`--user`, never root) |
+| `kent-llama` | llama module | local model server; reads models through group `kent-models` (unit `SupplementaryGroups`) |
 | `gent-<id>` | `kent-spawn-gent`, removed by `kent-destroy-gent` | one Gent container |
 | DynamicUser | systemd | the three Gent bridge socket proxies |
 
@@ -585,7 +607,8 @@ No shared account, and no one logs in as `kent`. Two sudo rules make up the whol
 privilege surface: `%kent-operators ALL=(kent) NOPASSWD: kent-exec` (the only way
 into Kent; validates arguments, records `human:<name>` in the audit chain), and
 `kent ALL=(root) NOPASSWD:` the root-owned, argument-validated brokers
-`kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl`. Full detail:
+`kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl`. One polkit rule adds that
+`kent-operators` may start, stop and restart `kent-llama.service` (no other unit or verb). Full detail:
 `docs/privilege-map.md`.
 
 ### 14.1 Profiles
@@ -712,10 +735,12 @@ minus `@privileged`, `UMask=0077`, `StateDirectory`/`LogsDirectory` for writable
 and credentials via `LoadCredential`. Vendor units (Alloy, Grafana) get the same
 through drop-ins. Documented exceptions: node_exporter needs `adjtimex` and no
 `ProtectClock` (timex collector); Squid needs its own `setuid`-family calls and
-`capset`, which are harmless without capabilities.
+`capset`, which are harmless without capabilities. kent-llama needs the NVIDIA device
+nodes, so it has `DevicePolicy=closed` with only those allowed instead of
+`PrivateDevices`, and no `MemoryDenyWriteExecute` (CUDA may JIT kernels).
 
 `systemd-analyze security` exposure: litellm 1.5, prometheus 1.5, node_exporter
-2.0, loki 1.5, alloy 1.7, grafana 2.9, gitea 1.5, kent-squid 1.5, bridges 1.2.
+2.0, loki 1.5, alloy 1.7, grafana 2.9, gitea 1.5, kent-squid 1.5, kent-llama 1.6, bridges 1.2.
 
 Planned: systemd-oomd `ManagedOOM*` policies for the heavy services.
 
@@ -725,7 +750,7 @@ Planned: systemd-oomd `ManagedOOM*` policies for the heavy services.
 
 | Host (systemd) | Docker |
 |---|---|
-| `kent-litellm`, `kent-prometheus`, `kent-node-exporter`, `kent-loki`, `alloy`, `grafana-server`, `kent-gitea`, `kent-squid`, `kent-gent-{egress,gateway}.socket`; Kent's user timers; llama-server (operator) | `kent-gent-<id>` containers only |
+| `kent-litellm`, `kent-prometheus`, `kent-node-exporter`, `kent-loki`, `alloy`, `grafana-server`, `kent-gitea`, `kent-squid`, `kent-gent-{egress,gateway}.socket`; Kent's timers; `kent-llama` (on demand) | `kent-gent-<id>` containers only |
 
 If Docker stops, Kent and all services keep working; a crashed Gent affects nothing else.
 

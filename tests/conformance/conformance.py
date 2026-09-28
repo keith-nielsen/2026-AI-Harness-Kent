@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import grp
 import json
 import os
 import pwd
 import re
 import sqlite3
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -237,9 +239,15 @@ def check_kent_core() -> None:
     ok("count=" in anchors, "§18 audit", "chain anchored in the journal", anchors[:60])
     for t in KENT_TIMERS:
         # A listed timer can still be dormant (no next elapse); require a scheduled next run.
-        nxt = sh("systemctl", "show", f"{t}.timer", "-p", "NextElapseUSecRealtime", "--value")
-        running = sh("systemctl", "is-active", f"{t}.service") == "active"
-        armed = bool(re.search(r"\d", nxt)) or running
+        # While the job runs the timer has no next elapse, and a oneshot job reports
+        # "activating", not "active"; re-read briefly so a run ending between the reads counts.
+        for _ in range(3):
+            nxt = sh("systemctl", "show", f"{t}.timer", "-p", "NextElapseUSecRealtime", "--value")
+            running = sh("systemctl", "is-active", f"{t}.service") in ("active", "activating", "deactivating")
+            armed = bool(re.search(r"\d", nxt)) or running
+            if armed:
+                break
+            time.sleep(1)
         ok(armed, "§7.2 Kent duties", f"{t}.timer armed (next run scheduled)", "running now" if running else (nxt or "none"))
         user = sh("systemctl", "show", "-p", "User", "--value", f"{t}.service")
         ok(user == "kent", "§14 accounts", f"{t}.service runs as kent", user or "(root)")
@@ -261,9 +269,18 @@ def check_kent_core() -> None:
     ok(bool(digest), "§7.2 Kent duties", "daily digest produced", digest[-1].name if digest else "")
     touched = [m.name for m in Path("/var/lib/kent-install/manifest").iterdir() if "ai-env" in m.read_text()]
     ok(not touched, "operator", "no Kent module records anything under ~/ai-env", ",".join(touched))
-    code, body = http("http://127.0.0.1:8888/search?q=linux&format=json")
-    n = len(json.loads(body).get("results", [])) if code == 200 else 0
-    ok(n > 0, "web search", "SearXNG JSON search answers", f"{n} results")
+    # Upstream engines rate-limit and suspend themselves for minutes at a time; retry before
+    # failing, and name the unresponsive engines so an upstream block is told apart from a fault.
+    n, down = 0, []
+    for q in ("linux", "linux kernel", "debian"):
+        code, body = http("http://127.0.0.1:8888/search?" + urllib.parse.urlencode({"q": q, "format": "json"}))
+        data = json.loads(body) if code == 200 else {}
+        n, down = len(data.get("results", [])), [e[0] for e in data.get("unresponsive_engines", [])]
+        if n:
+            break
+        time.sleep(3)
+    ok(n > 0, "web search", "SearXNG JSON search answers",
+       f"{n} results" + (f"; unresponsive: {','.join(down)}" if down else ""))
 
 
 def check_gents() -> None:
@@ -298,6 +315,93 @@ def check_gents() -> None:
     ok(st.returncode == 0, "§12/§15 isolation", "Gent tools self-test in a locked-down container", last)
 
 
+LLAMA_UNITS = ("kent-llama.service", "kent-llama-tuning.service", "srv-kent-models.mount")
+
+
+def check_llama() -> None:
+    """The local model server: own account, locked-down models behind a read-only mount, on demand."""
+    try:
+        pw = pwd.getpwnam("kent-llama")
+    except KeyError:
+        ok(False, "§14 accounts", "kent-llama account exists")
+        return
+    locked = sh("passwd", "-S", "kent-llama").split()[1:2] == ["L"]
+    ok(pw.pw_shell.endswith("nologin") and locked, "§14 accounts", "kent-llama: no login, locked password", pw.pw_shell)
+    groups = set(sh("id", "-nG", "kent-llama").split())
+    ok(not groups & {"docker", "sudo", "adm", "kent-operators", "kent-models"}, "§14 accounts",
+       "kent-llama has no privileged groups (kent-models only per unit)", " ".join(sorted(groups)))
+    sudo_rules = [f.name for f in Path("/etc/sudoers.d").iterdir() if "kent-llama" in f.read_text()]
+    ok(not sudo_rules, "§14 accounts", "no sudo rule mentions kent-llama", ",".join(sudo_rules))
+    members = [m for m in sh("getent", "group", "kent-models").split(":")[-1].split(",") if m]
+    bad = [m for m in members if m == "kent" or m.startswith("gent-") or m in SERVICES_ACCOUNTS]
+    ok(not bad, "§12 security", "kent-models: no Kent, Gent or service accounts", ",".join(members))
+    unit = sh("systemctl", "cat", "kent-llama.service")
+    ok("User=kent-llama" in unit and "SupplementaryGroups=kent-models" in unit, "§14 accounts",
+       "kent-llama.service runs as kent-llama, reads models via kent-models")
+    ok(sh("systemctl", "is-enabled", "kent-llama.service") in ("static", "disabled"), "§2 tiers",
+       "kent-llama.service on demand (not started at boot)")
+    for u in LLAMA_UNITS[:2]:
+        ok(sh("systemctl", "show", "-p", "NoNewPrivileges", "--value", u) == "yes", "§19 hardening", f"{u} NoNewPrivileges")
+    out = sh("systemd-analyze", "security", "--no-pager", "kent-llama.service")
+    m = re.search(r"exposure level for \S+: ([\d.]+)", out)
+    score = float(m.group(1)) if m else 10.0
+    ok(score <= 3.0, "§19 hardening", "kent-llama.service exposure ≤ 3.0", f"{score}")
+    # Models: root:kent-models, directory 0750, files 0440, every GGUF hashed.
+    mount = sh("systemctl", "cat", "srv-kent-models.mount")
+    src = next((l.split("=", 1)[1] for l in mount.splitlines() if l.startswith("What=")), "")
+    opts = next((l.split("=", 1)[1] for l in mount.splitlines() if l.startswith("Options=")), "")
+    ok(set("bind,ro,nodev,nosuid,noexec".split(",")) <= set(opts.split(",")), "§12 security",
+       "model mount declared ro,nodev,nosuid,noexec", opts)
+    live = sh("findmnt", "-rn", "-o", "OPTIONS", "/srv/kent/models")
+    if live:
+        ok({"ro", "nodev", "nosuid", "noexec"} <= set(live.split(",")), "§12 security",
+           "/srv/kent/models mounted ro,nodev,nosuid,noexec", live)
+    else:
+        rec("INFO", "§12 security", "/srv/kent/models not mounted (server stopped)")
+    d = Path(src)
+    if not src or not d.is_dir():
+        ok(False, "§12 security", "model directory present", src or "no What= in srv-kent-models.mount")
+        return
+    gid = grp.getgrnam("kent-models").gr_gid
+    st = d.stat()
+    ok(st.st_uid == 0 and st.st_gid == gid and st.st_mode & 0o777 == 0o750, "§12 security",
+       f"{d} is root:kent-models 0750", oct(st.st_mode & 0o777))
+    files = [f for f in d.iterdir() if f.is_file() and not f.is_symlink()]
+    wrong = [f.name for f in files if (f.stat().st_uid, f.stat().st_gid, f.stat().st_mode & 0o777) != (0, gid, 0o440)]
+    ok(not wrong, "§12 security", f"all {len(files)} model files root:kent-models 0440", ",".join(wrong)[:120])
+    sums = Path("/etc/kent/llama/models.sha256")
+    listed = {l.split(None, 1)[1].strip() for l in sums.read_text().splitlines() if l.strip()} if sums.exists() else set()
+    gguf = {f.name for f in files if f.suffix == ".gguf"}
+    ok(sums.exists() and sums.stat().st_uid == 0 and gguf <= listed, "§12 security",
+       "every GGUF has a root-owned SHA-256 record (checked at each start)", ",".join(sorted(gguf - listed))[:120])
+    # The binary is the root-owned copy recorded at install.
+    info = Path("/opt/kent-llama/BUILD-INFO")
+    changed = []
+    for line in (info.read_text().splitlines() if info.exists() else []):
+        if line.startswith("sha256 "):
+            _, want, rel = line.split(None, 2)
+            f = Path("/opt/kent-llama") / rel
+            if not f.exists() or f.stat().st_uid != 0 or sh("sha256sum", str(f)).split()[:1] != [want]:
+                changed.append(rel)
+    ok(info.exists() and not changed, "§12 security", "llama-server and its libraries match BUILD-INFO (root-owned)",
+       ",".join(changed))
+    rule = Path("/etc/polkit-1/rules.d/60-kent-llama.rules")
+    txt = rule.read_text() if rule.exists() else ""
+    ok(rule.exists() and rule.stat().st_uid == 0 and '"kent-llama.service"' in txt and 'isInGroup("kent-operators")' in txt
+       and txt.count("polkit.Result.YES") == 1, "§14 accounts",
+       "polkit: only kent-operators may start/stop kent-llama.service")
+    if sh("systemctl", "is-active", "kent-llama.service") == "active":
+        pid = sh("systemctl", "show", "-p", "MainPID", "--value", "kent-llama.service")
+        ok(sh("ps", "-o", "user=", "-p", pid) == "kent-llama", "§14 accounts", "llama-server runs as kent-llama")
+        listen = {l.split()[3] for l in sh("ss", "-ltnH", "( sport = :8080 )").splitlines() if l.strip()}
+        ok(listen == {"127.0.0.1:8080"}, "§16 network", "llama-server listens on 127.0.0.1:8080 only", ",".join(listen))
+    else:
+        rec("INFO", "§2 tiers", "local model server stopped (kent llama start)")
+
+
+SERVICES_ACCOUNTS = {acct for acct, _ in SERVICES.values()}
+
+
 def main() -> int:
     if os.geteuid() != 0:
         raise SystemExit("run as root: sudo ./kent-admin conformance")
@@ -305,15 +409,14 @@ def main() -> int:
     ap.add_argument("--markdown")
     a = ap.parse_args()
     for fn in (check_services, check_hardening, check_manifests, check_gateway, check_observability,
-               check_gitea, check_kent_account, check_kent_core, check_gents):
+               check_gitea, check_kent_account, check_kent_core, check_gents, check_llama):
         try:
             fn()
         except Exception as e:  # noqa: BLE001 - a crashing check is a failing check
             rec("FAIL", fn.__name__, "check crashed", repr(e)[:200])
     for area, item in [("§5 frontier", "Claude Opus 5.5 live calls (needs Anthropic key)"),
                        ("§16 firewall", "firewall hardening (deferred by operator)"),
-                       ("§18.4 AIDE / CVE scans", "deferred by operator"),
-                       ("llama.cpp", "runs under the operator, not a managed service (by decision)")]:
+                       ("§18.4 AIDE / CVE scans", "deferred by operator")]:
         rec("INFO", area, item, "deferred")
     fails = sum(1 for r in results if r[0] == "FAIL")
     passes = sum(1 for r in results if r[0] == "PASS")

@@ -2,12 +2,14 @@
 # =============================================================================
 # Kent — install.sh (run from a checkout of the repository)
 #
-#   sudo ./install.sh [--profile lab|hardened] [--config dev|prod] [--dry-run]
+#   sudo ./install.sh [--profile lab|hardened] [--config dev|prod] [--llama-build DIR] [--dry-run]
 #
 # Installs every Kent module in dependency order, each verifying itself, then enrols the
 # invoking user as Kent's operator and prints the next steps. Prerequisites: Ubuntu 24.04,
-# Docker, and a local OpenAI-compatible model server on 127.0.0.1:8080 (e.g. llama.cpp's
-# llama-server). Everything installed is recorded; `sudo ./uninstall.sh` reverses it.
+# Docker, an NVIDIA GPU and a llama.cpp build (the llama module installs a copy of its
+# llama-server as the on-demand kent-llama service on 127.0.0.1:8080; say where the build is
+# with --llama-build DIR/bin the first time). Everything installed is recorded;
+# `sudo ./uninstall.sh` reverses it.
 #
 #   --profile lab       (default) development: Kent keeps a general shell as the kent account
 #   --profile hardened  deployment: restricted Kent tools and policies (docs/design, §7)
@@ -17,11 +19,12 @@
 # =============================================================================
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-PROFILE=""; CONFIG=""; DRY=()
+PROFILE=""; CONFIG=""; DRY=(); LLAMA=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --profile) PROFILE="$2"; shift 2 ;;
         --config)  CONFIG="$2"; shift 2 ;;
+        --llama-build) LLAMA=(--from "$2"); shift 2 ;;
         --dry-run) DRY=(--dry-run); shift ;;
         -h|--help) sed -n '2,/^# =====/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
@@ -37,7 +40,7 @@ fi
 [[ "$CONFIG" == dev || "$CONFIG" == prod ]] || { echo "--config must be dev or prod" >&2; exit 2; }
 OP="${SUDO_USER:-}"; [[ -n "$OP" && "$OP" != root ]] || { echo "run via sudo from the operator's own account" >&2; exit 1; }
 
-MODULES=("litellm --config $CONFIG" prometheus node_exporter loki alloy grafana gitea searxng
+MODULES=("llama ${LLAMA[*]}" "litellm --config $CONFIG" prometheus node_exporter loki alloy grafana gitea searxng
          "hermes --profile $PROFILE" kent-core gent)
 LOGDIR="/var/lib/kent-install/logs/$(date +%Y%m%dT%H%M%S)"
 
@@ -57,8 +60,11 @@ check "python3.12, git, curl, jq, sqlite3, openssl" \
       "sudo apt install python3 git curl jq sqlite3 openssl"
 check "python3-yaml, python3.12-venv" 'python3 -c "import yaml" && python3.12 -c "import ensurepip, venv"' \
       "sudo apt install python3-yaml python3.12-venv"
-check "local model on :8080"    'curl -sf -m 5 http://127.0.0.1:8080/v1/models' \
-      "start your llama.cpp server (OpenAI-compatible API on 127.0.0.1:8080) first"
+check "NVIDIA driver"           'command -v nvidia-smi && nvidia-smi -L' "the local model server needs an NVIDIA GPU and driver"
+check "llama.cpp build"         '[[ -x "${LLAMA[1]:-/opt/kent-llama/bin}/llama-server" ]]' \
+      "pass --llama-build <llama.cpp>/build/bin (the directory holding llama-server)"
+check "port 8080 free (or Kent's)" '! ss -ltnH "( sport = :8080 )" | grep -q . || systemctl is-active --quiet kent-llama' \
+      "stop your own llama-server; Kent runs it as the kent-llama service"
 check "disk space (≥ 10 GB free in /opt and /var)" \
       '[[ $(df --output=avail -BG /opt | tail -1 | tr -dc 0-9) -ge 10 && $(df --output=avail -BG /var | tail -1 | tr -dc 0-9) -ge 10 ]]' \
       "free some space"

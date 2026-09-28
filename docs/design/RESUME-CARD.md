@@ -1,5 +1,20 @@
 # Resume card — Kent harness (state at end of session, 2026-09-28 ~19:10 +08, before a host reboot)
 
+## Update 2026-09-29 (v0.1.0-rc.4)
+
+- **Conformance for rc.3 + llama: 139 PASS / 0 FAIL / 13 INFO** (recorded in `docs/conformance.md`). Check
+  fixes: timer-armed accepted only `active` (a running oneshot is `activating`); SearXNG check retries and
+  names rate-limited engines.
+- **llama.cpp is a managed service** (architecture 3.2.0, `install/services/llama/`): `kent-llama.service`
+  on demand, own account, models `root:kent-models` 0440 behind a read-only hash-checked bind mount,
+  polkit start/stop for kent-operators (`kent llama start|stop`), CPU-tuning oneshot. F-09 addressed.
+- **`uninstall.sh`**: `--log FILE` / `--trace` (full module output and per-line trace to a user-owned log);
+  removes emptied shared parents (`/etc/kent`, `/srv/kent`); `--purge` also removes `/var/lib/kent-install`.
+- **Next: full uninstall to a never-had-Kent state**, then Phase 5 reinstall. Plan and the operator's
+  decisions (A–F) are in the session memory; the host-only clean-up (model modes 0444, personal Hermes,
+  SearXNG image, tarball of `~/.local/share/kent`) is not repo code. The oracle is stopped; restart it
+  after the reinstall for the Hermes Kent/Gent test.
+
 Read this first in a new session, then `docs/audit/2026-09-28-external-security-review.md` §8
 (remediation status), `docs/design/operator-experience.md` (the design being implemented) and
 `docs/observability-guide.html` (how to look at what the harness is doing).

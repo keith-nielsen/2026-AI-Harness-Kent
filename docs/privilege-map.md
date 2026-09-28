@@ -24,13 +24,21 @@ secret file modes.
 | `gitea:gitea` | gitea module | none / nologin | `kent-gitea.service` | gitea uninstall |
 | `kent-squid:kent-squid` | gent module | none / nologin | `kent-squid.service` | gent uninstall |
 | `kent-searxng:kent-searxng` | searxng module | `/nonexistent` / nologin | the `kent-searxng` container (`--user`; never root) | searxng uninstall |
+| `kent-llama:kent-llama` | llama module | `/nonexistent` / nologin, locked password, no sudo | `kent-llama.service` (on demand); reads models via group `kent-models` (unit `SupplementaryGroups`, not membership) | llama uninstall |
 | `kent:kent` | hermes module | `/var/lib/kent` / nologin | Kent (its pinned Hermes, via `kent`), Kent's 5 timers | hermes uninstall |
 | `gent-<id>:gent-<id>` | `kent-spawn-gent` | `/nonexistent` / nologin | container `kent-gent-<id>` | `kent-destroy-gent` |
 | DynamicUser | systemd | — | `kent-gent-egress.service`, `kent-gent-gateway.service` | automatic |
-| `<op>` | — (existing) | existing | the `kent` command (as themselves), llama-server | — |
+| `<op>` | — (existing) | existing | the `kent` command (as themselves), incl. `kent llama start\|stop` | — |
 
 Group `kent-operators` (hermes module): humans allowed to use Kent. Membership is
 the only thing that lets a person reach Kent; nobody logs in or `su`s to `kent`.
+It also grants, through the polkit rule `/etc/polkit-1/rules.d/60-kent-llama.rules`,
+start/stop/restart of `kent-llama.service` and nothing else (no other unit, no
+enable/mask/edit); the `kent` account is excluded by name.
+
+Group `kent-models` (llama module): readers of the model directory (`root:kent-models`,
+0750; files 0440). Members: the installing operator. The service gets it per unit.
+Never `kent`, a Gent or another service account (conformance checks this).
 
 No account is shared between services. The installers refuse to adopt an
 existing account or group they did not create.
@@ -57,7 +65,7 @@ from Loki), not `sudo`.
 | 172.30.0.1:8888 | search bridge (socket proxy) | DynamicUser | Gent network only |
 | 172.30.0.1:4000 | gateway bridge (socket proxy) | DynamicUser | Gent network only |
 | 172.30.0.1:3129 | egress bridge (socket proxy) | DynamicUser | Gent network only |
-| 127.0.0.1:8080 | llama-server (not managed by Kent) | `<op>` | host |
+| 127.0.0.1:8080 | llama-server (`kent-llama.service`, on demand) | `kent-llama` | host |
 
 UFW (if active): `allow in on kent-gent0 to 172.30.0.1 port 3129,4000,8888 proto tcp`, recorded and removed on uninstall.
 
