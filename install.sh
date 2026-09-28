@@ -40,7 +40,7 @@ fi
 [[ "$CONFIG" == dev || "$CONFIG" == prod ]] || { echo "--config must be dev or prod" >&2; exit 2; }
 OP="${SUDO_USER:-}"; [[ -n "$OP" && "$OP" != root ]] || { echo "run via sudo from the operator's own account" >&2; exit 1; }
 
-MODULES=("llama ${LLAMA[*]}" "litellm --config $CONFIG" prometheus node_exporter loki alloy grafana gitea searxng
+MODULES=("llama --profile $PROFILE ${LLAMA[*]}" "litellm --config $CONFIG" prometheus node_exporter loki alloy grafana gitea searxng
          "hermes --profile $PROFILE" kent-core gent)
 LOGDIR="/var/lib/kent-install/logs/$(date +%Y%m%dT%H%M%S)"
 

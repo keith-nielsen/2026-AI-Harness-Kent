@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
 done
 export DRY_RUN; require_root
 OP=kent   # Kent calls the brokers; humans use the kent command
-audit_event "install started ($*)"
+audit_event "install started (${INVOCATION_ARGS})"
 
 log "preflight"
 systemctl is-active --quiet docker || die "docker is not running"

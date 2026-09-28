@@ -2,39 +2,45 @@
 # =============================================================================
 # Kent — install/services/llama/install.sh
 # The local model server (llama.cpp llama-server) as a managed, on-demand service:
-#   account  kent-llama:kent-llama (system, nologin, no sudo); group kent-models (model readers:
-#            the service through SupplementaryGroups, plus the installing operator)
+#   account  kent-llama:kent-llama (system, nologin, no sudo); group kent-models (model readers in
+#            the hardened profile: the service through SupplementaryGroups, plus the installing operator)
 #   code     /opt/kent-llama/{bin,lib} — a root-owned copy of an existing llama.cpp build (llama-server
 #            and the libraries it links from its build directory; hashes in BUILD-INFO)
-#   models   MODELS_DIR (default /media/administrator/DATA/models) re-owned root:kent-models, directory
-#            0750, files 0440; the original owner/mode of every file is recorded and restored on
-#            uninstall. SHA-256 of every *.gguf in /etc/kent/llama/models.sha256; the service
-#            refuses to load a file whose hash does not match.
+#   models   MODELS_DIR (default /media/administrator/DATA/models), by profile (models-perms.sh):
+#            lab: files keep their owner, only write bits are removed; hardened: root:kent-models,
+#            directory 0750, files 0440, originals recorded and restored on uninstall. Both: SHA-256
+#            of every *.gguf in /etc/kent/llama/models.sha256; the service refuses to load a file
+#            whose hash does not match.
 #   mount    srv-kent-models.mount: MODELS_DIR bound read-only at /srv/kent/models (ro,nodev,nosuid,noexec)
 #   units    kent-llama.service (127.0.0.1:8080, hardened, not enabled at boot) and
 #            kent-llama-tuning.service (root oneshot: SMT/boost off while the server runs, restored after)
 #   polkit   60-kent-llama.rules: kent-operators may start/stop/restart kent-llama.service, nothing else
 #   config   /etc/kent/llama/llama.env (settings; see kent_llama_launch.py)
 #
-# Usage: sudo ./install.sh [--from BUILD_BIN_DIR] [--models-dir DIR] [--no-start] [--dry-run]
+# Usage: sudo ./install.sh [--from BUILD_BIN_DIR] [--models-dir DIR] [--profile lab|hardened]
+#                          [--no-start] [--dry-run]
 #        sudo ./install.sh --set KEY=VALUE      change one setting in llama.env
-#        sudo ./install.sh --rehash             re-record model hashes and re-apply owner/mode
-#                                                (after adding or replacing a model file)
+#        sudo ./install.sh --rehash [--profile lab|hardened]
+#                                               re-record model hashes and re-apply the models mode
+#                                               (after adding or replacing a model file; with
+#                                               --profile, switch the models mode)
+# --profile defaults to the recorded models mode, else /etc/kent/profile, else lab.
 # =============================================================================
 set -euo pipefail
 SERVICE="llama"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../lib-service.sh"
+source "$HERE/models-perms.sh"
 
 OPT=/opt/kent-llama; CONF=/etc/kent/llama; SUMS=$CONF/models.sha256; UNIT=kent-llama.service
 MOUNT_UNIT=srv-kent-models.mount; MNT=/srv/kent/models
 RULE=/etc/polkit-1/rules.d/60-kent-llama.rules
-PERMS_BACKUP="$INSTALL_STATE/backup/llama/models-perms"
-FROM="${KENT_LLAMA_BUILD:-}"; MODELS_DIR=""; START=1; SET=""; REHASH_ONLY=0
+FROM="${KENT_LLAMA_BUILD:-}"; MODELS_DIR=""; START=1; SET=""; REHASH_ONLY=0; PROFILE_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --from)       FROM="$2"; shift 2 ;;
         --models-dir) MODELS_DIR="$2"; shift 2 ;;
+        --profile)    PROFILE_ARG="$2"; shift 2 ;;
         --no-start)   START=0; shift ;;
         --set)        SET="$2"; shift 2 ;;
         --rehash)     REHASH_ONLY=1; shift ;;
@@ -67,28 +73,9 @@ current_models_dir() { sed -n "s/^What=//p" "/etc/systemd/system/$MOUNT_UNIT" 2>
 [[ -n "$MODELS_DIR" ]] || MODELS_DIR="$(current_models_dir)"
 [[ -n "$MODELS_DIR" ]] || MODELS_DIR=/media/administrator/DATA/models
 MODELS_DIR="$(realpath -m "$MODELS_DIR")"
-
-# Record each file's original owner/mode once (restored on uninstall), then lock the directory
-# down: root:kent-models, directory 0750, files 0440. Only regular files directly in the directory.
-secure_models() {
-    [[ -d "$MODELS_DIR" ]] || die "models directory $MODELS_DIR not found (is the drive mounted?)"
-    local f
-    if [[ "$DRY_RUN" -eq 0 ]]; then
-        install -d -m 0700 "$(dirname "$PERMS_BACKUP")"
-        touch "$PERMS_BACKUP"; chmod 0600 "$PERMS_BACKUP"
-        grep -q "^dir " "$PERMS_BACKUP" || stat -c 'dir %a %U %G %n' "$MODELS_DIR" >> "$PERMS_BACKUP"
-        for f in "$MODELS_DIR"/*; do
-            [[ -f "$f" && ! -L "$f" ]] || continue
-            grep -qF " $f" "$PERMS_BACKUP" || stat -c 'file %a %U %G %n' "$f" >> "$PERMS_BACKUP"
-        done
-    fi
-    manifest_add modelsdir "$MODELS_DIR"
-    run chown root:kent-models "$MODELS_DIR"; run chmod 0750 "$MODELS_DIR"
-    for f in "$MODELS_DIR"/*; do
-        [[ -f "$f" && ! -L "$f" ]] || continue
-        run chown root:kent-models "$f"; run chmod 0440 "$f"
-    done
-}
+# Models mode (profile): lab leaves the operator's files as they are, hardened locks them down.
+PREV_MODE="$(models_mode_recorded)"
+MODE="$(resolve_models_mode "$PROFILE_ARG")"
 
 # SHA-256 of every GGUF (the kind of file this service loads), recorded root-owned.
 record_hashes() {
@@ -99,18 +86,44 @@ record_hashes() {
             | awk '{ h = $1; sub(/^[^ ]+  /, ""); n = split($0, p, "/"); print h "  " p[n] }' | sort -k2 > "$tmp"
     fi
     n="$(wc -l < "$tmp")"
-    claim_path file "$SUMS"
+    # Audit trail: what this rehash changed, per file, and who ran it. The previous record is kept
+    # beside the new one (inside /etc/kent/llama, which the module claims, so uninstall removes it).
+    claim_path file "$SUMS"   # before touching anything: refuses a record Kent did not create
+    local line who="human:${SUDO_USER:-root}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log "dry run: no hashes computed, so no comparison with $SUMS"
+    else
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            audit_event "rehash by $who: $line"
+            log "rehash by $who: $line"
+        done < <(python3 "$HERE/bin/kent_llama_hashes.py" "$SUMS" "$tmp")
+        if [[ -f "$SUMS" ]] && ! cmp -s "$SUMS" "$tmp"; then
+            install -m 0644 -o root -g root "$SUMS" "$SUMS.$(date -u +%Y%m%dT%H%M%SZ)"
+        fi
+    fi
     run install -m 0644 -o root -g root "$tmp" "$SUMS"; rm -f "$tmp"
     audit_event "recorded SHA-256 of $n model files"
     log "recorded SHA-256 of $n GGUF files in $SUMS"
 }
 
+# The operator reads the locked-down models through kent-models (hardened only; in lab the files
+# stay theirs). The group itself always exists: the unit's SupplementaryGroups names it.
+operator_reads_models() {
+    local op; op="$(operator_user)"
+    if [[ "$MODE" == hardened ]] && ! id -nG "$op" 2>/dev/null | tr ' ' '\n' | grep -qx kent-models; then
+        run gpasswd -a "$op" kent-models >/dev/null
+        manifest_add member "kent-models $op"
+    fi
+}
+
 if [[ "$REHASH_ONLY" -eq 1 ]]; then
     manifest_has modelsdir "$MODELS_DIR" || die "not installed (models directory not recorded)"
-    secure_models; record_hashes; exit 0
+    operator_reads_models   # a switch from lab to hardened (kent-admin profile hardened)
+    apply_models_mode "$MODE" "$PREV_MODE"; record_hashes; exit 0
 fi
 
-audit_event "install started ($*)"
+audit_event "install started (${INVOCATION_ARGS})"
 log "preflight"
 if [[ -z "$FROM" ]]; then   # re-run: the recorded build if it still exists, else keep the installed copy
     FROM="$(sed -n 's/^source //p' "$OPT/BUILD-INFO" 2>/dev/null)"
@@ -130,11 +143,7 @@ if ! getent group kent-models >/dev/null; then
 elif ! manifest_has group kent-models; then
     die "group 'kent-models' already exists and was not created by Kent; refusing to adopt it"
 fi
-OP="$(operator_user)"
-if ! id -nG "$OP" 2>/dev/null | tr ' ' '\n' | grep -qx kent-models; then
-    run gpasswd -a "$OP" kent-models >/dev/null
-    manifest_add member "kent-models $OP"
-fi
+operator_reads_models
 
 # --- Code: a root-owned copy of the build (binary + the libraries it links from its build dir) ---
 if [[ "$(readlink -f "$FROM")" != "$OPT/bin" ]]; then
@@ -161,6 +170,7 @@ if [[ "$(readlink -f "$FROM")" != "$OPT/bin" ]]; then
     run install -m 0644 -o root -g root "$WORK/BUILD-INFO" "$OPT/BUILD-INFO"
 fi
 run install -m 0755 -o root -g root "$HERE/bin/kent_llama_launch.py" "$OPT/libexec/kent-llama-launch"
+run install -m 0755 -o root -g root "$HERE/bin/kent_llama_hashes.py" "$OPT/libexec/kent-llama-hashes"
 for s in kent-llama-verify kent-llama-wait kent-llama-tuning; do
     run install -m 0755 -o root -g root "$HERE/libexec/$s" "$OPT/libexec/$s"
 done
@@ -169,9 +179,12 @@ done
 claim_path path "$CONF"
 ensure_dir "$CONF" 0750 root kent-llama
 [[ -f "$CONF/llama.env" ]] || place_file file "$HERE/llama.env" "$CONF/llama.env" 0640 root kent-llama
+# systemd creates the unit's CacheDirectory (CUDA kernel cache) on first start; record it so
+# uninstall always removes it (a cache: `path`, not `state`).
+manifest_add path /var/cache/kent-llama
 
-# --- Models: lock down, hash, read-only mount ---
-secure_models
+# --- Models: apply the profile's mode, hash, read-only mount ---
+apply_models_mode "$MODE" "$PREV_MODE"
 record_hashes
 ensure_dir /srv/kent 0755 root root
 ensure_dir "$MNT" 0755 root root

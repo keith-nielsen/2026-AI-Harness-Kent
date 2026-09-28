@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 LIB = Path(__file__).resolve().parents[2] / "install" / "services" / "lib-service.sh"
 
 
@@ -124,3 +126,87 @@ def test_uninstall_removes_group_membership_it_added(tmp_path):
     grp = subprocess.run(["id", "-gn"], capture_output=True, text=True).stdout.strip()
     r = sh(tmp_path, "uninstall_module", f"member {grp} {user}\n")
     assert f"gpasswd -d {user} {grp}" in r.stdout
+
+
+def test_invocation_args_survive_the_modules_option_loop(tmp_path):
+    """Modules source the library before parsing, then shift their arguments away; the
+    'install started (...)' audit line must still carry what the operator passed."""
+    mod = tmp_path / "install.sh"
+    mod.write_text(f'set -euo pipefail\nsource {LIB}\n'
+                   'while [[ $# -gt 0 ]]; do shift; done\n'
+                   'echo "install started (${INVOCATION_ARGS})"\n')
+    mdir = tmp_path / "manifest"
+    mdir.mkdir()
+    env = {**os.environ, "KENT_MANIFEST_DIR": str(mdir), "DRY_RUN": "1"}
+    r = subprocess.run(["bash", str(mod), "--config", "dev", "--no-start"], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "install started (--config dev --no-start)"
+
+
+def test_every_module_logs_its_arguments():
+    for f in sorted(LIB.parent.glob("*/install.sh")):
+        lines = [l for l in f.read_text().splitlines() if 'audit_event "install started' in l]
+        assert lines and all("${INVOCATION_ARGS}" in l for l in lines), f
+
+
+def test_uninstall_removes_timer_last_run_stamp(tmp_path):
+    # Persistent=true timers leave /var/lib/systemd/timers/stamp-<unit>; it goes with the unit.
+    r = sh(tmp_path, "uninstall_module",
+           "unit /etc/systemd/system/kent-x.timer\nunit /etc/systemd/system/kent-x.service\n")
+    assert r.returncode == 0, r.stderr
+    assert "rm -f /var/lib/systemd/timers/stamp-kent-x.timer" in r.stdout
+    assert "stamp-kent-x.service" not in r.stdout
+
+
+def test_uninstall_removes_user_timer_stamp_in_operator_home(tmp_path):
+    user = os.environ.get("USER") or subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
+    home = subprocess.run(["getent", "passwd", user], capture_output=True, text=True).stdout.split(":")[5]
+    r = sh(tmp_path, "uninstall_module",
+           f"userunit {user} {home}/.config/systemd/user/kent-y.timer\n"
+           f"userunit {user} {home}/.config/systemd/user/kent-y.service\n")
+    assert r.returncode == 0, r.stderr
+    assert f"rm -f {home}/.local/share/systemd/timers/stamp-kent-y.timer" in r.stdout
+    assert "stamp-kent-y.service" not in r.stdout
+
+
+def _fake_systemctl(tmp_path, state: str) -> dict:
+    """PATH shim: `systemctl ... is-enabled U` prints <state>; any other call just succeeds."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    (bindir / "systemctl").write_text(
+        "#!/bin/sh\n"
+        f'case " $* " in *" is-enabled "*) echo {state}; [ {state} = enabled ] ;; *) exit 0 ;; esac\n')
+    (bindir / "systemctl").chmod(0o755)
+    return {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
+
+
+def sh_env(tmp_path, script: str, env: dict, manifest: str = "") -> subprocess.CompletedProcess:
+    mdir = tmp_path / "manifest"
+    mdir.mkdir(exist_ok=True)
+    (mdir / "t").write_text(manifest)
+    env = {**env, "KENT_MANIFEST_DIR": str(mdir), "DRY_RUN": "1", "SERVICE": "t"}
+    return subprocess.run(["bash", "-c", f"source {LIB}; SERVICE=t; {script}"], env=env,
+                          capture_output=True, text=True)
+
+
+def test_unit_off_disables_an_enabled_unit(tmp_path):
+    r = sh_env(tmp_path, "unit_off kent-x.service", _fake_systemctl(tmp_path, "enabled"))
+    assert r.returncode == 0 and "systemctl disable --now kent-x.service" in r.stdout
+
+
+@pytest.mark.parametrize("state", ["static", "indirect", "disabled", "generated", "not-found"])
+def test_unit_off_only_stops_units_that_are_not_enabled(tmp_path, state):
+    r = sh_env(tmp_path, "unit_off kent-x.service", _fake_systemctl(tmp_path, state))
+    assert r.returncode == 0 and "systemctl stop kent-x.service" in r.stdout and "disable" not in r.stdout
+
+
+def test_unit_off_passes_the_user_scope(tmp_path):
+    r = sh_env(tmp_path, "unit_off kent-x.timer --user -M op@", _fake_systemctl(tmp_path, "static"))
+    assert "systemctl --user -M op@ stop kent-x.timer" in r.stdout
+
+
+def test_uninstall_of_a_missing_unit_does_not_abort(tmp_path):
+    unit = tmp_path / "kent-nonexistent-xyz.service"
+    r = sh_env(tmp_path, "uninstall_module", dict(os.environ), f"unit {unit}\n")
+    assert r.returncode == 0 and f"rm -f {unit}" in r.stdout

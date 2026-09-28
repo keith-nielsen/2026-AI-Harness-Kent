@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in --no-start) START=0; shift ;; --dry-run) DRY_RUN=1; shift ;; *) die "unknown option: $1" ;; esac
 done
 export DRY_RUN; require_root
-audit_event "install started ($*)"
+audit_event "install started (${INVOCATION_ARGS})"
 
 log "preflight"
 command -v unzip >/dev/null || die "unzip is required"

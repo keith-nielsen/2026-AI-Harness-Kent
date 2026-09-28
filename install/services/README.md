@@ -18,11 +18,18 @@ all are installed by `sudo ./install.sh` at the repository root, in the order be
 | `searxng` | SearXNG metasearch (digest-pinned container, systemd-managed, read-only, no capabilities) | `kent-searxng` | 127.0.0.1:8888 |
 | `hermes` | the `kent` account + `kent-operators` group; Kent's own Hermes (commit-pinned, `uv sync --frozen`) and the tirith command scanner (pinned) in `/opt/kent-hermes`; managed policy (`configs/hermes/base.yaml` + `profile-<lab\|hardened>.yaml`), SOUL, bundled skills + `kent/crew-designer` | `kent` | — |
 | `kent-core` | Kent's tools (audit chain, digest, learnings review + escalation relay, QA, `kent-gent`), system timers as kent, the `kent` command and `kent-exec` entry point; enrols the installing operator | `kent` | — |
-| `llama` | llama.cpp `llama-server` (root-owned copy of the operator's build) as on-demand `kent-llama.service`; models `root:kent-models` 0440 via read-only bind mount `/srv/kent/models`, SHA-256-checked at each start; polkit start/stop for `kent-operators`; CPU tuning oneshot | `kent-llama`; group `kent-models` | 127.0.0.1:8080 |
+| `llama` | llama.cpp `llama-server` (root-owned copy of the operator's build) as on-demand `kent-llama.service`; models by profile (lab: left operator-owned, write bits removed; hardened: `root:kent-models` 0440, restored on uninstall), read via read-only bind mount `/srv/kent/models`, SHA-256-checked at each start, per-file audit on rehash; polkit start/stop for `kent-operators`; CPU tuning oneshot | `kent-llama`; group `kent-models` (members: hardened only) | 127.0.0.1:8080 |
 | `gent` | Gent runtime: internal Docker network, egress proxy, bridge sockets (gateway, proxy, search), image, spawn/destroy/ctl brokers | `kent-squid`; one `gent-<id>` per Gent | 127.0.0.1:3129; 172.30.0.1:3129/4000/8888 |
 
 Order: llama → litellm → prometheus/node_exporter → loki → alloy → grafana → gitea → searxng → hermes → kent-core → gent.
 Uninstall in reverse. `snapshot.sh take/diff` records machine state before/after for rollback checks.
+
+Uninstall (`../../uninstall.sh`) is built from shared helpers: `lib-preflight.sh` (checks, before
+anything changes, for processes of Kent accounts outside Kent's own units, Docker stopped, the
+dpkg lock, a missing model drive, damaged manifests; `--check` runs it alone), `lib-uninstall-hints.sh`
+(turns a failing module's output into a likely cause; the run stops at the first failure and
+prints the command to resume, `--keep-going` to continue) and `verify-clean.sh` (a fixed list of
+every Kent name and place; `--verify`, and automatically after a successful `--purge`).
 
 No PostgreSQL: the gateway authenticates by identity without a database; Gitea and
 Grafana use SQLite.
@@ -43,6 +50,11 @@ Grafana use SQLite.
   (`/var/lib/kent-install/manifest/<name>`). Vendor config files are never overwritten; use the
   vendor's drop-in or override mechanism instead. Uninstall removes only what the
   manifest lists and keeps state unless `--purge-state` is given.
+- **Record every directory systemd makes for a unit.** A `StateDirectory=`, `CacheDirectory=`,
+  `LogsDirectory=` or `ConfigurationDirectory=` must be recorded in the module's manifest
+  (`state` for data, `path` for caches); `tests/install/test_unit_directories_recorded.py` enforces
+  it. Uninstall also removes the `stamp-<timer>` record systemd keeps for each removed timer, and
+  only stops (rather than disables) units that were never enabled.
 - **Containers run as registered host accounts** (`--user`), never as root or as an id that exists only
   inside the image, so the host's account allocator cannot hand the same id to someone else.
 - **Units are namespaced** (`kent-<name>.service`) and listen on `127.0.0.1` only.

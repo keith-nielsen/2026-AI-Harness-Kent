@@ -39,7 +39,7 @@ export DRY_RUN; require_root
 [[ -z "$PROFILE" && -f "$PROFILE_FILE" ]] && PROFILE="$(cat "$PROFILE_FILE")"
 PROFILE="${PROFILE:-lab}"
 [[ "$PROFILE" == lab || "$PROFILE" == hardened ]] || die "--profile must be lab or hardened"
-audit_event "install started (profile=$PROFILE $*)"
+audit_event "install started (profile=$PROFILE ${INVOCATION_ARGS})"
 
 log "preflight"
 [[ -x /usr/bin/python3.12 ]] || die "system Python 3.12 not found (Ubuntu 24.04 ships it)"

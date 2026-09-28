@@ -24,7 +24,7 @@ source "$HERE/../lib-service.sh"
 
 while [[ $# -gt 0 ]]; do case "$1" in --dry-run) DRY_RUN=1; shift ;; *) die "unknown option: $1" ;; esac; done
 export DRY_RUN; require_root
-audit_event "install started"
+audit_event "install started (${INVOCATION_ARGS})"
 OP="$(operator_user)"
 OPT=/opt/kent-core; ETC=/etc/kent/kent; CRED=$ETC/credentials; DATA=/var/lib/kent
 UNITS=(kent-audit-anchor kent-audit-ingest kent-digest kent-poll-learnings kent-qa-audit)

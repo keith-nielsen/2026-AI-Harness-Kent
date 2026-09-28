@@ -36,9 +36,12 @@ It also grants, through the polkit rule `/etc/polkit-1/rules.d/60-kent-llama.rul
 start/stop/restart of `kent-llama.service` and nothing else (no other unit, no
 enable/mask/edit); the `kent` account is excluded by name.
 
-Group `kent-models` (llama module): readers of the model directory (`root:kent-models`,
-0750; files 0440). Members: the installing operator. The service gets it per unit.
-Never `kent`, a Gent or another service account (conformance checks this).
+Group `kent-models` (llama module): readers of the model directory in the **hardened**
+profile (`root:kent-models`, 0750; files 0440). Members: the installing operator, hardened
+only. The service gets it per unit. Never `kent`, a Gent or another service account
+(conformance checks this). In the **lab** profile the model files stay operator-owned and
+world-readable (0444: Kent removes only write bits), so the group has no members and no file
+depends on it.
 
 No account is shared between services. The installers refuse to adopt an
 existing account or group they did not create.

@@ -96,7 +96,21 @@ Working with Kent needs no sudo and no `su`: you hand Kent a project with
 `kent gent export <id> ./out` (files arrive owned by you).
 
 Add Claude later: `sudo ./kent-admin set-anthropic-key`, then `sudo ./kent-admin config prod`.
-Remove everything: `sudo ./uninstall.sh` (data kept unless `--purge`).
+
+Model files: in the lab profile they stay yours (Kent only removes their write bits); the
+hardened profile makes them `root:kent-models` 0440 and restores them on uninstall. Either way
+the model server reads them through a read-only mount and refuses one whose SHA-256 changed.
+
+Remove Kent:
+
+```bash
+./uninstall.sh --check                             # what would stop it halfway (no sudo; changes nothing)
+sudo ./uninstall.sh --purge --log ~/un.log --trace # everything incl. data; stops at the first failure
+./uninstall.sh --verify                            # confirm nothing of Kent is left (runs by itself after --purge)
+```
+
+Without `--purge` Kent's data is kept. Exit codes: 0 done, 1 a module failed (the output says
+why and how to resume), 2 usage, 3 pre-flight refused (nothing changed), 4 leftovers found.
 
 ## Repository
 

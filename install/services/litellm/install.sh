@@ -69,7 +69,7 @@ while [[ $# -gt 0 ]]; do
 done
 export DRY_RUN
 require_root
-audit_event "install started"
+audit_event "install started (${INVOCATION_ARGS})"
 
 if [[ -n "$FALLBACK_TIMEOUT" ]] && ! [[ "$FALLBACK_TIMEOUT" =~ ^[0-9]+$ && "$FALLBACK_TIMEOUT" -gt 0 ]]; then
     die "fallback timeout must be a positive whole number of seconds"

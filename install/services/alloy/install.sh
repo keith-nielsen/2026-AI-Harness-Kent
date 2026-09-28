@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in --live-debugging) LIVE_DEBUG=1; shift ;; --no-start) START=0; shift ;; --dry-run) DRY_RUN=1; shift ;; *) die "unknown option: $1" ;; esac
 done
 export DRY_RUN; require_root
-audit_event "install started ($*)"
+audit_event "install started (${INVOCATION_ARGS})"
 
 log "preflight"
 grep -rqs "apt.grafana.com" /etc/apt/sources.list.d/ || die "Grafana apt repository not configured (/etc/apt/sources.list.d/grafana.list)"

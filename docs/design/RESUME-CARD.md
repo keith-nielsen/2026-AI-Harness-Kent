@@ -1,5 +1,23 @@
 # Resume card — Kent harness (state at end of session, 2026-09-28 ~19:10 +08, before a host reboot)
 
+## Update 2026-09-29 late (rc.5 work, uncommitted)
+
+- **Host is Kent-free and verified**: rc.4 uninstall (all 12 modules exit 0), then May-2026 prototype
+  remnants (squid, grafana, three `gent-*` accounts, `~/stacks`) and rc.4 gaps removed by hand;
+  `verify-clean.sh` finds nothing. Evidence: `~/Documents/kent-uninstall-evidence-20260929.tar.gz`
+  (logs, traces, snapshots incl. `00c-baseline`, INSTALL-LOG, BUILD-PLAN, oracle queue).
+- **Agent sudo grant revoked** (2026-09-29 01:55). Every sudo step is the operator's again.
+- **rc.5 work integrated, uncommitted, pending operator review** (items 1–9: uninstall pre-flight
+  `--check`, stop-at-first-failure with hints, `--verify`, unit directories and timer records,
+  quieter systemd, installer arguments logged, lab/hardened model handling, rehash audit trail,
+  docs); 338 unit tests, shellcheck clean.
+- **Next: Phase 5**: `sudo ./install.sh --llama-build <build>/bin`, conformance, restart the oracle
+  (`python3 tests/sim/oracle.py --port 4010`) for the Hermes Kent/Gent test, then an uninstall
+  `--check` / `--purge` / verify cycle.
+- **Flagged to the operator**: `/etc/sudoers.d/claude-bt-temp` (not Kent's) likely sets
+  `timestamp_type=global, timestamp_timeout=30`, so one sudo password unlocks root for every
+  process of the account for 30 minutes. Never use that window.
+
 ## Update 2026-09-29 (v0.1.0-rc.4)
 
 - **Conformance for rc.3 + llama: 139 PASS / 0 FAIL / 13 INFO** (recorded in `docs/conformance.md`). Check

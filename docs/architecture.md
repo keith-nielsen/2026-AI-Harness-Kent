@@ -1,12 +1,24 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.0
+version: 3.2.1
 date: 2026-09-29
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.1
+    date: 2026-09-29
+    summary: >
+      Model file handling follows the profile: lab leaves the operator's files
+      as they are (only write bits removed; uninstall leaves them), hardened keeps
+      root:kent-models 0750/0440 with record and restore. The hash check and the
+      read-only mount apply in both. A rehash logs one audit line per added,
+      changed or removed model with the operator's name and keeps the previous
+      record. Uninstall gains a pre-flight check, stops at the first failure with
+      a likely cause and a resume command, and verifies afterwards that no Kent
+      component is left (uninstall.sh --check / --verify). Found by the first full
+      uninstall to a never-had-Kent state.
   - version: 3.2.0
     date: 2026-09-29
     summary: >
@@ -220,10 +232,15 @@ The local model is llama.cpp's `llama-server`, run on demand as `kent-llama.serv
 account cannot). It runs as `kent-llama` from a root-owned copy of the build in
 `/opt/kent-llama`, with settings in `/etc/kent/llama/llama.env` (the measured optimum:
 Qwen3.6-35B-A3B MTP, 256k context, `-ncmoe 40`, non-thinking; change with
-`kent-admin llama set`). The models are `root:kent-models` (0750/0440), read through a
-read-only bind mount at `/srv/kent/models` (`ro,nodev,nosuid,noexec`), and each start
-refuses a model whose SHA-256 differs from the install-time record
-(`/etc/kent/llama/models.sha256`; `kent-admin models rehash` after adding one). SMT and
+`kent-admin llama set`). Ownership of the model files follows the profile: in **lab** they
+stay the operator's (Kent only removes their write bits, so they must be world-readable, and
+uninstall leaves them); in **hardened** they are `root:kent-models` (0750/0440), the originals
+are recorded and restored on uninstall (`kent-admin profile` switches and re-applies). In both,
+the server reads them through a read-only bind mount at `/srv/kent/models`
+(`ro,nodev,nosuid,noexec`) and each start refuses a model whose SHA-256 differs from the
+recorded one (`/etc/kent/llama/models.sha256`). `kent-admin models rehash` after adding or
+replacing a model logs one audit line per added, changed or removed file with the operator's
+name (`human:<name>`) and keeps the previous record as `models.sha256.<UTC time>`. SMT and
 CPU boost are switched off by a root oneshot while the server runs and restored after.
 
 ### 2.5 Reference Hardware
@@ -590,7 +607,7 @@ Planned: key rotation, container image scanning.
 
 | Account | Created by | Runs |
 |---|---|---|
-| operator (e.g. `administrator`), in `kent-operators` and `kent-models` | — | the `kent` command (incl. `kent llama start\|stop`) |
+| operator (e.g. `administrator`), in `kent-operators` (and `kent-models` in the hardened profile) | — | the `kent` command (incl. `kent llama start\|stop`) |
 | `kent` | hermes module | Kent (its own Hermes), Kent's 5 system timers |
 | `litellm` | litellm module | gateway |
 | `prometheus`, `node_exporter`, `loki` | their modules | metrics and logs |

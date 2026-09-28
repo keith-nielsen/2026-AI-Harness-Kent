@@ -14,6 +14,9 @@ set -euo pipefail
 # Traced runs (uninstall.sh --trace): bash running as root does not import PS4 from the
 # environment, so set the timestamped script:line prefix here.
 if [[ -o xtrace ]]; then PS4='+ $(date +%H:%M:%S.%3N) ${BASH_SOURCE[0]##*/}:${LINENO}: '; fi
+# The module's own command-line arguments, captured here because modules source this file
+# before their option loop shifts them away (a sourced file sees its caller's "$@").
+INVOCATION_ARGS="$*"
 
 # Installer bookkeeping lives apart from Kent's own home (/var/lib/kent belongs to the kent
 # account), like dpkg's /var/lib/dpkg: manifests and moved-aside originals, root-only.
@@ -213,6 +216,18 @@ move_aside() {  # move_aside <path>   (no-op if absent or already moved by Kent)
     log "moved pre-existing $orig aside -> $bak (restored on uninstall)"
 }
 
+# Take a unit down for removal: disable+stop only if it is actually enabled; a static, indirect,
+# disabled or generated unit is just stopped (disabling it is a no-op that makes systemctl print a
+# long "no installation config" explanation). Extra args select the scope, e.g. --user -M op@.
+unit_off() {  # unit_off <unit> [systemctl scope args...]
+    local u="$1" st; shift
+    st="$(systemctl "$@" is-enabled "$u" 2>/dev/null || true)"
+    case "$st" in
+        enabled|enabled-runtime|linked|linked-runtime|alias) run systemctl "$@" disable --now "$u" ;;
+        *) run systemctl "$@" stop "$u" ;;
+    esac
+}
+
 # --- Generic uninstall --------------------------------------------------------
 # Removes exactly what the module's manifest lists, in dependency order:
 # units (stop/disable) → drop-ins → files → paths → state (only with purge) →
@@ -227,21 +242,27 @@ uninstall_module() {
 
     declare -F pre_uninstall >/dev/null && pre_uninstall
 
-    local p u g op
+    local p u g op h
     # User-level units (systemd --user of the operator): stop, disable, remove.
     while read -r op p; do
         [[ -n "$p" ]] || continue
         case "$p" in *.timer|*.service)
-            run systemctl --user -M "${op}@" disable --now "$(basename "$p")" 2>/dev/null || true ;; esac
+            unit_off "$(basename "$p")" --user -M "${op}@" 2>/dev/null || true ;; esac
         run rm -f "$p"
+        # Persistent=true timers leave a last-run record behind; remove it with the unit.
+        if [[ "$p" == *.timer ]]; then
+            h="$(getent passwd "$op" | cut -d: -f6 || true)"
+            [[ -z "$h" ]] || run rm -f "$h/.local/share/systemd/timers/stamp-$(basename "$p")"
+        fi
     done < <(entries userunit)
     [[ -n "$(entries userunit)" ]] && { run systemctl --user -M "$(entries userunit | head -1 | cut -d' ' -f1)@" daemon-reload || true; }
 
     while read -r p; do
         [[ -n "$p" ]] || continue
         u="$(basename "$p")"
-        systemctl list-unit-files "$u" &>/dev/null && run systemctl disable --now "$u" || true
+        systemctl list-unit-files "$u" &>/dev/null && { unit_off "$u" || true; }
         run rm -f "$p"
+        if [[ "$u" == *.timer ]]; then run rm -f "/var/lib/systemd/timers/stamp-$u"; fi
     done < <(entries unit)
     while read -r p; do [[ -n "$p" ]] && run rm -f "$p"; done < <(entries dropin)
     run systemctl daemon-reload

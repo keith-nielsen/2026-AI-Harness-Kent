@@ -4,7 +4,9 @@
 #
 #   sudo ./kent-admin status                  profile, gateway config, Anthropic key, services
 #   sudo ./kent-admin profile lab|hardened    switch Kent's Hermes policy (re-renders its managed
-#                                             config; takes effect at Kent's next start)
+#                                             config; takes effect at Kent's next start) and the
+#                                             model files' mode (lab: left as yours; hardened:
+#                                             root:kent-models 0440), re-recording their hashes
 #   sudo ./kent-admin config dev|prod         gateway routing: dev = every tier on the local model;
 #                                             prod = smart/frontier on Claude (needs the key)
 #   sudo ./kent-admin set-anthropic-key       store the Anthropic key for the gateway (prompted,
@@ -13,7 +15,7 @@
 #                                             THINK, ALIAS, PIN, CORES, TUNE); operators then run
 #                                             `kent llama restart`
 #   sudo ./kent-admin models rehash           after adding or replacing a model file: re-apply
-#                                             root:kent-models 0440 and re-record SHA-256 hashes
+#                                             the profile's models mode and re-record SHA-256 hashes
 #   sudo ./kent-admin conformance             run the conformance suite
 #
 # Every change goes through the module installers, so it is recorded in their manifests and
@@ -56,6 +58,9 @@ case "$cmd" in
     profile)
         p="${1:-}"; [[ "$p" == lab || "$p" == hardened ]] || { echo "usage: kent-admin profile lab|hardened" >&2; exit 2; }
         "$SVC/hermes/install.sh" --profile "$p"
+        # The models follow the profile too (lab: yours as they are; hardened: root:kent-models).
+        # Re-applies the models mode and re-records the hashes; no restart of the model server.
+        if [[ -f /var/lib/kent-install/manifest/llama ]]; then "$SVC/llama/install.sh" --rehash --profile "$p"; fi
         echo "Profile is now $p. A running 'kent' session keeps its old policy until restarted."
         ;;
     config)

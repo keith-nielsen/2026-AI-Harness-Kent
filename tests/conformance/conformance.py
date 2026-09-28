@@ -318,8 +318,18 @@ def check_gents() -> None:
 LLAMA_UNITS = ("kent-llama.service", "kent-llama-tuning.service", "srv-kent-models.mount")
 
 
+def models_mode(manifest: Path = Path("/var/lib/kent-install/manifest/llama")) -> str:
+    """The llama module's recorded models mode: lab (files left as the operator's) or hardened
+    (root:kent-models). A recorded directory without a mode line is a pre-profile install: hardened."""
+    lines = manifest.read_text().splitlines() if manifest.exists() else []
+    modes = [l.split()[1] for l in lines if l.startswith("modelsmode ") and len(l.split()) > 1]
+    if modes:
+        return modes[-1]
+    return "hardened" if any(l.startswith("modelsdir ") for l in lines) else "lab"
+
+
 def check_llama() -> None:
-    """The local model server: own account, locked-down models behind a read-only mount, on demand."""
+    """The local model server: own account, models (per profile) behind a read-only mount, on demand."""
     try:
         pw = pwd.getpwnam("kent-llama")
     except KeyError:
@@ -346,7 +356,7 @@ def check_llama() -> None:
     m = re.search(r"exposure level for \S+: ([\d.]+)", out)
     score = float(m.group(1)) if m else 10.0
     ok(score <= 3.0, "§19 hardening", "kent-llama.service exposure ≤ 3.0", f"{score}")
-    # Models: root:kent-models, directory 0750, files 0440, every GGUF hashed.
+    # Models: lab = the operator's files, read-only; hardened = root:kent-models 0750/0440; every GGUF hashed.
     mount = sh("systemctl", "cat", "srv-kent-models.mount")
     src = next((l.split("=", 1)[1] for l in mount.splitlines() if l.startswith("What=")), "")
     opts = next((l.split("=", 1)[1] for l in mount.splitlines() if l.startswith("Options=")), "")
@@ -362,13 +372,24 @@ def check_llama() -> None:
     if not src or not d.is_dir():
         ok(False, "§12 security", "model directory present", src or "no What= in srv-kent-models.mount")
         return
-    gid = grp.getgrnam("kent-models").gr_gid
+    mode = models_mode()
+    rec("INFO", "§12 security", "models mode (profile)", mode)
     st = d.stat()
-    ok(st.st_uid == 0 and st.st_gid == gid and st.st_mode & 0o777 == 0o750, "§12 security",
-       f"{d} is root:kent-models 0750", oct(st.st_mode & 0o777))
     files = [f for f in d.iterdir() if f.is_file() and not f.is_symlink()]
-    wrong = [f.name for f in files if (f.stat().st_uid, f.stat().st_gid, f.stat().st_mode & 0o777) != (0, gid, 0o440)]
-    ok(not wrong, "§12 security", f"all {len(files)} model files root:kent-models 0440", ",".join(wrong)[:120])
+    if mode == "hardened":
+        gid = grp.getgrnam("kent-models").gr_gid
+        ok(st.st_uid == 0 and st.st_gid == gid and st.st_mode & 0o777 == 0o750, "§12 security",
+           f"{d} is root:kent-models 0750", oct(st.st_mode & 0o777))
+        wrong = [f.name for f in files if (f.stat().st_uid, f.stat().st_gid, f.stat().st_mode & 0o777) != (0, gid, 0o440)]
+        ok(not wrong, "§12 security", f"all {len(files)} model files root:kent-models 0440", ",".join(wrong)[:120])
+    else:
+        # lab: the operator keeps their files; no write bits at all, and readable by kent-llama (other).
+        ok(not st.st_mode & 0o002 and st.st_mode & 0o001, "§12 security",
+           f"{d} not world-writable, reachable by kent-llama", oct(st.st_mode & 0o777))
+        writable = [f.name for f in files if f.stat().st_mode & 0o222]
+        ok(not writable, "§12 security", f"all {len(files)} model files read-only (no write bits)", ",".join(writable)[:120])
+        unreadable = [f.name for f in files if f.suffix == ".gguf" and not f.stat().st_mode & 0o004]
+        ok(not unreadable, "§12 security", "every GGUF readable by kent-llama", ",".join(unreadable)[:120])
     sums = Path("/etc/kent/llama/models.sha256")
     listed = {l.split(None, 1)[1].strip() for l in sums.read_text().splitlines() if l.strip()} if sums.exists() else set()
     gguf = {f.name for f in files if f.suffix == ".gguf"}
