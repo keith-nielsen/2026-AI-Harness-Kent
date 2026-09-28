@@ -1,13 +1,13 @@
 #!/usr/bin/python3 -I
-"""kent-spawn-gent <stack_id> <project_dir>   (root; operator runs it via sudo)
+"""kent-spawn-gent <stack_id> <project_dir>   (root; the kent account runs it via sudo)
    kent-spawn-gent --recreate <stack_id>      replace the container with one on the
                                               current image, keeping all Gent state
 
 Creates one isolated Gent:
   - system account gent-<id> (own uid/gid, no login, no home)
   - /var/lib/kent-gent/stacks/<id>/
-        data/     gent-<id>:<operator-group> 2750  stack.db, project/, workspace/
-        inbox/    <operator>:gent-<id>       0750  Kent's answers (mounted read-only)
+        data/     gent-<id>:kent  2750  stack.db, project/, workspace/ (Kent reads, never writes)
+        inbox/    kent:gent-<id>  0750  Kent's answers (mounted read-only)
   - gateway key: /etc/kent/litellm/gent-keys/<id>.key (identity gent-<id>, local tiers only)
                  /var/lib/kent-gent/keys/<id>.key      (mounted read-only into the container)
   - private Gitea repo kent/gent-<id> (created with admin rights; Kent's token pushes to it)
@@ -113,6 +113,7 @@ def start_container(sid: str, uid: int, gid: int) -> str:
         "-e", f"HTTP_PROXY=http://{BRIDGE_IP}:3129", "-e", f"HTTPS_PROXY=http://{BRIDGE_IP}:3129",
         "-e", f"http_proxy=http://{BRIDGE_IP}:3129", "-e", f"https_proxy=http://{BRIDGE_IP}:3129",
         "-e", f"NO_PROXY={BRIDGE_IP}", "-e", f"no_proxy={BRIDGE_IP}",
+        "-e", f"SEARXNG_URL=http://{BRIDGE_IP}:8888",
         IMAGE,
     )
 
@@ -142,8 +143,8 @@ def main() -> None:
     if not re.fullmatch(r"[0-9a-f]{8}", sid):
         die("stack_id must be 8 lowercase hex characters")
     op = os.environ.get("SUDO_USER", "")
-    if not op or op == "root":
-        die("run via sudo from the operator account")
+    if op != "kent":
+        die("only the kent account may spawn Gents (run via: kent new ...)")
     op_pw = pwd.getpwnam(op)
     user = f"gent-{sid}"
     try:

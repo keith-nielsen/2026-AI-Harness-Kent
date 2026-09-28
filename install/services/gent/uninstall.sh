@@ -14,9 +14,9 @@ pre_uninstall() {
             [[ -f "$f" ]] || continue
             sid="$(basename "$f")"
             if [[ "${PURGE_STATE:-0}" -eq 1 ]]; then
-                run env SUDO_USER="$(operator_user)" /opt/kent-gent/bin/kent-destroy-gent "$sid"
+                run env SUDO_USER=kent /opt/kent-gent/bin/kent-destroy-gent "$sid"
             else
-                run env SUDO_USER="$(operator_user)" /opt/kent-gent/bin/kent-destroy-gent "$sid" --archive
+                run env SUDO_USER=kent /opt/kent-gent/bin/kent-destroy-gent "$sid" --archive
             fi
         done
     fi

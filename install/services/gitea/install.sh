@@ -86,11 +86,11 @@ if [[ ! -s "$CRED/kent_token" ]]; then
     [[ "$tok" =~ ^[0-9a-f]{40}$ ]] || die "could not create kent token"
     (umask 077; printf '%s' "$tok" > "$CRED/kent_token"); unset tok
 fi
-for f in admin_password:gitea_admin_password kent_token:gitea_kent_token; do
-    src="$CRED/${f%%:*}"; dst="$OKD/${f##*:}"
-    claim_path file "$dst"
-    install -m 0600 -o "$OPERATOR" -g "$OPERATOR" "$src" "$dst"
-done
+# The operator gets the admin password; Kent's token stays with Kent (copied by kent-core).
+dst="$OKD/gitea_admin_password"
+claim_path file "$dst"
+install -m 0600 -o "$OPERATOR" -g "$OPERATOR" "$CRED/admin_password" "$dst"
+retire_file "$OKD/gitea_kent_token"
 
 TOK="$(cat "$CRED/kent_token")"
 gapi() { curl -s -m 10 -H "Authorization: token ${TOK}" -H 'Content-Type: application/json' "$@"; }

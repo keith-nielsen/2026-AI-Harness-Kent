@@ -14,7 +14,7 @@
 # root-only until Gents are deployed. The Anthropic key never leaves the service.
 #
 # Usage:
-#   sudo ./install.sh [--config dev|prod] [--fallback-timeout SECONDS] [--no-start] [--dry-run]
+#   sudo ./install.sh [--config dev|prod|sim|sim-routed] [--fallback-timeout SECONDS] [--no-start] [--dry-run]
 #   sudo ./install.sh --set-anthropic-key          # prompt for the key, restart
 #   sudo ./install.sh --set-fallback-timeout SECONDS   # change it, restart
 #
@@ -50,7 +50,7 @@ PYTHON="/usr/bin/python3.12"
 # Below this, real Opus calls are likely to time out and fall back (see header).
 MIN_SAFE_FALLBACK_TIMEOUT=60
 
-CONFIG_FLAVOR="dev"
+CONFIG_FLAVOR=""
 START=1
 SET_KEY=0
 FALLBACK_TIMEOUT=""
@@ -132,11 +132,21 @@ if [[ "$SET_KEY" -eq 1 ]]; then
     exit 0
 fi
 
+# Without --config, keep the flavour the installed config was rendered from (default dev).
+if [[ -z "$CONFIG_FLAVOR" ]]; then
+    case "$(head -1 "${CONF_DIR}/config.yaml" 2>/dev/null)" in
+        *litellm_config.yaml*) CONFIG_FLAVOR=prod ;;
+        *litellm_config.sim.yaml*) CONFIG_FLAVOR=sim ;;
+        *litellm_config.sim-routed.yaml*) CONFIG_FLAVOR=sim-routed ;;
+        *) CONFIG_FLAVOR=dev ;;
+    esac
+fi
 case "$CONFIG_FLAVOR" in
     dev)  SRC_CONFIG="${KENT_ROOT}/configs/litellm_config.dev.yaml" ;;
     prod) SRC_CONFIG="${KENT_ROOT}/configs/litellm_config.yaml" ;;
     sim)  SRC_CONFIG="${KENT_ROOT}/configs/litellm_config.sim.yaml" ;;  # simulation only (oracle fixture)
-    *)    die "--config must be dev, prod or sim" ;;
+    sim-routed) SRC_CONFIG="${KENT_ROOT}/configs/litellm_config.sim-routed.yaml" ;;  # prod routing, oracle as Opus
+    *)    die "--config must be dev, prod, sim or sim-routed" ;;
 esac
 OPERATOR="$(operator_user)"
 OPERATOR_HOME="$(getent passwd "$OPERATOR" | cut -d: -f6)"
@@ -216,15 +226,14 @@ if [[ ! -e "${CRED_DIR}/anthropic_api_key" ]]; then
     run install -m 0600 -o root -g root /dev/null "${CRED_DIR}/anthropic_api_key"
 fi
 
-# Operator-side copies: the operator's own key and Kent's (Hermes) key.
-# Both run as the operator account, so this separation labels traffic in the
-# activity log; it is not a security boundary between the two.
+# The operator's own key, in the operator's home (e.g. for a personal Hermes or scripts).
+# Kent's key is not copied here: Kent runs as the kent account and reads its own copy
+# (installed by the kent-core and hermes modules).
 ensure_dir "$OPERATOR_KEY_DIR" 0700 "$OPERATOR" "$OPERATOR" "$OPERATOR"
-for identity in operator kent; do
-    dest="${OPERATOR_KEY_DIR}/litellm_${identity}_key"
-    claim_path file "$dest"
-    run install -m 0600 -o "$OPERATOR" -g "$OPERATOR" "${CRED_DIR}/${identity}_key" "$dest"
-done
+dest="${OPERATOR_KEY_DIR}/litellm_operator_key"
+claim_path file "$dest"
+run install -m 0600 -o "$OPERATOR" -g "$OPERATOR" "${CRED_DIR}/operator_key" "$dest"
+retire_file "${OPERATOR_KEY_DIR}/litellm_kent_key"
 
 # ─── 6. Unit ─────────────────────────────────────────────────────────────────
 claim_path unit "$UNIT_PATH"
@@ -286,4 +295,4 @@ fi
 
 warn_if_timeout_too_short
 audit_event "install completed"
-log "done. Next (as ${OPERATOR}, no sudo): install/services/litellm/configure-hermes.sh"
+log "done."

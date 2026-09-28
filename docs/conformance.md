@@ -29,7 +29,7 @@ design *with these amendments*; `architecture.md` itself will be revised to matc
 | Cloud model | DeepSeek + Anthropic | Claude only: smart and frontier → Claude Opus 5.5 (`claude-opus-5-5`) in prod; no DeepSeek |
 | Local-first | ~95% local | End-state for later; cloud intelligence does the heavy lifting for now |
 | Tier access | Gent CEO: fast + smart | Gents are **local-only** (router, fast). Anything harder is escalated to Kent |
-| Kent's identity | Unix user `kent`, own service | Kent is the `kent` profile of the operator's existing Hermes install, runs as the operator; no own venv; `~/ai-env` untouched |
+| Kent's identity | Unix user `kent`, own service | Restored in architecture 3.1.0: Kent is the no-login `kent` account with its own commit-pinned Hermes (`/opt/kent-hermes`); humans use the `kent` command (group `kent-operators`); `~/ai-env` is untouched; an operator may run their personal Hermes on Kent's pinned install with their own home and gateway key. (From rc.1 to rc.2 Kent was a profile of the operator's Hermes, running as the operator.) |
 | Service accounts | Some shared groups (`ollama`, `agentic-logs`) | Every service has its own `user:group`; no shared `kent:kent` |
 | Gateway auth | LiteLLM virtual keys + DB | Single LiteLLM gateway, identity auth in `kent_gateway.py` (operator, kent, gent, gent-<id>, metrics); no PostgreSQL |
 | Log shipping | Promtail | Grafana Alloy (apt package), journald → Loki |
@@ -119,6 +119,7 @@ Found by the simulation (S), rollback test (R) and conformance pass (G). All fix
 
 | Item | Notes |
 |---|---|
+| **External security review (2026-09-28)** | [`audit/2026-09-28-external-security-review.md`](audit/2026-09-28-external-security-review.md): 1 Critical, 7 High, 9 Medium, 3 Low against CSA AI Guidelines, the Agentic AI Addendum and CCoP 2026. P0: sandbox or allowlist Kent's tools, remove its root-equivalent access, revoke the dev sudo grant |
 | Anthropic key + live Opus calls | Then set `FALLBACK_TIMEOUT=120` (see warning in `install/services/litellm/install.sh`) and re-run conformance with `--config prod` |
 | Dev-mode learning judge | Local judge adopted 5/6 generic learnings vs Opus 1/7: raise the bar or require operator approval until a key exists |
 | Seed-from archive (§11.2) | Not built |
@@ -128,6 +129,8 @@ Found by the simulation (S), rollback test (R) and conformance pass (G). All fix
 | Regulated-data gaps | Redaction/DLP before cloud calls, encryption at rest, backups/DR, off-host immutable logs, MFA/SSO: see [`controls.md`](controls.md) "Gaps before regulated data" |
 | Firewall, AIDE, pip-audit/trivy, `chattr +a` | Deferred hardening |
 | Layer-3 prompt-injection tests against Kent | Deferred while the agent sudo grant is active |
+| Full conformance run on the kent-account layout (3.1.0) | Deferred by the operator. Module self-verification, non-root conformance checks and 215 unit tests pass; `kent-admin conformance` and the manual runbook (reference answers K1–K6) to be re-run and recorded |
+| Hardened profile | Policy written and rendered (install-verified: tirith fails closed); not yet exercised in use |
 | llama.cpp as a managed service | Deferred by decision |
 
 ---
@@ -137,15 +140,14 @@ Found by the simulation (S), rollback test (R) and conformance pass (G). All fix
 Manual, operator-run: [`manual-validation.md`](manual-validation.md) (sign-off table in §12). Automated:
 
 ```bash
-python3 tests/conformance/conformance.py --markdown /tmp/conformance.md   # live system
+sudo ./kent-admin conformance --markdown /tmp/conformance.md              # live system (root, read-only)
 python3 -m pytest tests/gateway tests/kent_core tests/gent tests/install   # unit
 LITELLM_BIN=<venv>/bin/litellm python3 -m pytest tests/live               # live gateway (ports 4099/9199)
 tests/gent/run_tools_selftest.sh                                          # Gent isolation
 python3 tests/live/router_probe.py --repeat 2                             # router stability/injection
 ```
 
-Rollback test: `install/services/snapshot.sh take <name>` → each module's
-`uninstall.sh --purge-state` in reverse order → `snapshot.sh take` → `snapshot.sh diff 00c-baseline <name>`.
+Rollback test: `install/services/snapshot.sh take <name>` → `sudo ./uninstall.sh --purge` → `snapshot.sh take` → `snapshot.sh diff 00c-baseline <name>`.
 
 ---
 
@@ -154,4 +156,8 @@ Rollback test: `install/services/snapshot.sh take <name>` → each module's
 | Date | Change |
 |---|---|
 | 2026-09-28 | First report (v0.1.0-rc.1): all modules installed (litellm, prometheus, node_exporter, loki, alloy, grafana, gitea, kent-core, gent); full simulation; two full rollback cycles; 99 PASS / 0 FAIL / 6 INFO |
+| 2026-09-28 | Simulated external security review against CSA Guidelines on Securing AI Systems (2024), Securing Agentic AI Addendum (2026) and CCoP 2026: see `audit/`. Findings open |
 | 2026-09-28 | v0.1.0-rc.2: legacy installer and configs retired; docs rewritten for the live harness; control matrix and manual validation runbook added (runbook executed end to end on the reference machine, outputs recorded in it); findings R5 and R6 fixed; 99 PASS / 0 FAIL / 6 INFO; 214 unit + 46 live tests |
+| 2026-09-28 | v0.1.0-rc.3: Kent's own account and pinned Hermes (architecture 3.1.0), SearXNG, root install/uninstall/kent-admin, conformance ported with new checks (incl. keyless web fallback off); sim-routed gateway flavour; failure causes logged; Kent routing dashboard. 220 unit tests pass; **conformance not yet re-run for rc.3** (last full run: rc.2) |
+| 2026-09-28 | Architecture 3.1.0 implemented (uncommitted at time of writing): `kent` account and pinned Hermes, `kent` command + `kent-exec`, system timers, Gent brokers incl. `kent-gent-ctl`, SearXNG module and Gent search bridge, lab/hardened profiles, `install.sh` / `uninstall.sh` / `kent-admin`, conformance check ported. Full conformance run deferred |
+| 2026-09-28 | tirith 0.4.2 pinned (SHA-256; release signature checked) and enforced through Kent's managed scope; Kent's SearXNG runs as the new `kent-searxng` account instead of root (fixes the uid/gid 977 overlap with the image's internal user); operator's personal SearXNG container retired |

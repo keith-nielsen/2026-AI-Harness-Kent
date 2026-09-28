@@ -12,7 +12,20 @@
 # =============================================================================
 set -euo pipefail
 
-MANIFEST_DIR="${KENT_MANIFEST_DIR:-/var/lib/kent/manifest}"   # override only for tests
+# Installer bookkeeping lives apart from Kent's own home (/var/lib/kent belongs to the kent
+# account), like dpkg's /var/lib/dpkg: manifests and moved-aside originals, root-only.
+INSTALL_STATE="/var/lib/kent-install"
+MANIFEST_DIR="${KENT_MANIFEST_DIR:-$INSTALL_STATE/manifest}"   # override only for tests
+
+# One-time migration from v0.1, which kept these under /var/lib/kent.
+if [[ $EUID -eq 0 && "${DRY_RUN:-0}" -eq 0 && -z "${KENT_MANIFEST_DIR:-}" \
+      && -d /var/lib/kent/manifest && ! -d "$INSTALL_STATE/manifest" ]]; then
+    install -d -m 0755 -o root -g root "$INSTALL_STATE"
+    mv /var/lib/kent/manifest "$INSTALL_STATE/manifest"
+    [[ -d /var/lib/kent/backup ]] && mv /var/lib/kent/backup "$INSTALL_STATE/backup"
+    sed -i 's#/var/lib/kent/backup#/var/lib/kent-install/backup#g' "$INSTALL_STATE"/manifest/*
+    logger -t kent-install -- "migrated installer bookkeeping to $INSTALL_STATE" 2>/dev/null || true
+fi
 DRY_RUN="${DRY_RUN:-0}"
 
 log()  { echo "[$(date '+%H:%M:%S')] ${SERVICE:-kent}: $*"; }
@@ -79,6 +92,17 @@ ensure_service_account() {  # ensure_service_account <name> <home> <comment>
     manifest_add user "$name"
     manifest_add group "$name"
     log "created system account ${name}:${name}"
+}
+
+# Remove a file this module created in an earlier version and no longer installs, and drop
+# it from the manifest (upgrade clean-up). Files Kent did not create are never touched.
+retire_file() {  # retire_file <path>
+    local path="$1" mf; mf="$(manifest_file)"
+    manifest_has file "$path" || return 0
+    run rm -f "$path"
+    if [[ "$DRY_RUN" -eq 1 ]]; then echo "  [dry-run] manifest -= file $path"
+    else grep -vxF "file $path" "$mf" > "$mf.tmp" || true; mv "$mf.tmp" "$mf"; fi
+    log "retired $path (no longer installed by this module)"
 }
 
 # Refuse to overwrite a path or unit that Kent did not create.
@@ -174,7 +198,7 @@ record_unit_state() {  # record_unit_state <unit>
 
 # Move a pre-existing path aside (e.g. vendor data that Kent must start fresh
 # from) so uninstall can put it back byte-for-byte. Recorded as "moved <orig> <bak>".
-BACKUP_ROOT="/var/lib/kent/backup"
+BACKUP_ROOT="$INSTALL_STATE/backup"
 move_aside() {  # move_aside <path>   (no-op if absent or already moved by Kent)
     local orig="$1" bak="${BACKUP_ROOT}/${SERVICE}${1}"
     grep -q "^moved ${orig} " "$(manifest_file)" 2>/dev/null && return 0
@@ -255,6 +279,10 @@ uninstall_module() {
         [[ -n "$d" && -d "$d" ]] && run rmdir --ignore-fail-on-non-empty "$d"
     done < <(entries dir | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
 
+    # Group memberships Kent added to existing (human) accounts: "member <group> <user>".
+    while read -r g u; do
+        [[ -n "$u" ]] && id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx "$g" && { run gpasswd -d "$u" "$g" || true; }
+    done < <(entries member)
     while read -r u; do [[ -n "$u" ]] && id "$u" &>/dev/null && run userdel "$u"; done < <(entries user)
     while read -r g; do [[ -n "$g" ]] && getent group "$g" &>/dev/null && run groupdel "$g"; done < <(entries group)
 

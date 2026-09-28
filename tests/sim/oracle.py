@@ -7,8 +7,9 @@ cloud model while no API key is configured.
 
 Each POST /v1/chat/completions is queued as <dir>/requests/<id>.json and the
 call blocks until <dir>/responses/<id>.md appears (its text becomes the
-assistant message) or --wait seconds pass (then 504, and the gateway falls back
-to the local tier). Streaming requests get the same answer as SSE chunks.
+assistant message), or <id>.json with tool calls (see parse_answer), or --wait
+seconds pass (then 504, and the gateway falls back to the local tier).
+Streaming requests get the same answer as SSE chunks.
 Request contents are data for whoever answers; nothing in them is executed.
 Binds 127.0.0.1 only; accepts any bearer token (only the gateway can call it).
 """
@@ -65,19 +66,21 @@ class Oracle(BaseHTTPRequestHandler):
         rid = new_id()
         (self.queue / "requests" / f"{rid}.json").write_text(json.dumps(
             {"id": rid, "received": datetime.now(timezone.utc).isoformat(), "request": req}, indent=2))
-        answer_file = self.queue / "responses" / f"{rid}.md"
+        answers = [self.queue / "responses" / f"{rid}.{ext}" for ext in ("md", "json")]
         deadline = time.time() + self.wait
-        while time.time() < deadline and not answer_file.exists():
+        while time.time() < deadline and not any(f.exists() for f in answers):
             time.sleep(1)
-        if not answer_file.exists():
+        answer_file = next((f for f in answers if f.exists()), None)
+        if answer_file is None:
             (self.queue / "requests" / f"{rid}.json").rename(self.queue / "requests" / f"{rid}.timeout.json")
             return self._json(504, {"error": {"message": "oracle did not answer in time", "type": "timeout"}})
         time.sleep(0.2)  # let the writer finish
-        text = answer_file.read_text()
+        text, tool_calls = parse_answer(answer_file, rid)
         (self.queue / "requests" / f"{rid}.json").rename(self.queue / "done" / f"{rid}.json")
-        created, model = int(time.time()), "oracle-opus"
+        created, model = int(time.time()), req.get("model") or "oracle-opus"
+        finish = "tool_calls" if tool_calls else "stop"
         usage = {"prompt_tokens": sum(len(str(m.get("content", ""))) // 4 for m in req.get("messages", [])),
-                 "completion_tokens": len(text) // 4}
+                 "completion_tokens": (len(text) + len(json.dumps(tool_calls))) // 4}
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
         if req.get("stream"):
             self.send_response(200)
@@ -91,12 +94,30 @@ class Oracle(BaseHTTPRequestHandler):
             chunk({"role": "assistant", "content": ""})
             for i in range(0, len(text), 400):
                 chunk({"content": text[i:i + 400]})
-            chunk({}, "stop", usage=usage)
+            for i, call in enumerate(tool_calls):
+                chunk({"tool_calls": [{"index": i, **call}]})
+            chunk({}, finish, usage=usage)
             self.wfile.write(b"data: [DONE]\n\n")
             return
+        message = {"role": "assistant", "content": text or None}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
         self._json(200, {"id": f"chatcmpl-{rid}", "object": "chat.completion", "created": created, "model": model,
-                         "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
-                                      "finish_reason": "stop"}], "usage": usage})
+                         "choices": [{"index": 0, "message": message, "finish_reason": finish}], "usage": usage})
+
+
+def parse_answer(path: Path, rid: str) -> tuple[str, list[dict]]:
+    """An answer is <id>.md (plain text) or <id>.json:
+    {"content": "optional text", "tool_calls": [{"name": "web_search", "arguments": {...}}, ...]}.
+    Tool calls are returned in OpenAI form so the caller (e.g. Hermes) runs its own tools and
+    sends the results back as a new request."""
+    if path.suffix == ".md":
+        return path.read_text(), []
+    ans = json.loads(path.read_text())
+    calls = [{"id": f"call_{rid}_{i}", "type": "function",
+              "function": {"name": c["name"], "arguments": json.dumps(c.get("arguments", {}))}}
+             for i, c in enumerate(ans.get("tool_calls", []))]
+    return ans.get("content", ""), calls
 
 
 def main() -> None:

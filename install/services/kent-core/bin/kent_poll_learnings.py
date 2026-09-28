@@ -77,7 +77,7 @@ def breaker_reasons(sdb, over_budget: bool) -> list[str]:
 
 
 def trip_breaker(c: dict, kdb, sid: str, repo: str, reasons: list[str]) -> None:
-    subprocess.run(["docker", "stop", "-t", "30", f"kent-gent-{sid}"], capture_output=True)
+    kentlib.gent_ctl(c, "stop", sid)
     kdb.execute("UPDATE stack_registry SET status='paused' WHERE stack_id=?", (sid,))
     kdb.commit()
     body = ("Kent halted this Gent (circuit breaker). Its container is stopped; all state is kept.\n\n"

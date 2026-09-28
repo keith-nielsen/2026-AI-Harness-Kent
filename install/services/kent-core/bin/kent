@@ -1,0 +1,111 @@
+#!/usr/bin/python3 -I
+"""kent — work with Kent as yourself (members of group kent-operators).
+
+  kent                          chat with Kent
+  kent -q "question"            one question, one answer
+  kent status                   health of Kent and its services
+  kent digest                   today's digest
+  kent audit                    verify Kent's audit chain
+  kent gents                    list Gents
+  kent gent <status|logs|wait|assess|pause|resume|restart|destroy> ID [...]
+  kent gent export ID [DEST]    copy a Gent's deliverables into DEST (default ./gent-ID), owned by you
+  kent new DIR [--name NAME]    start a Gent from DIR/project.yaml, agents.yaml, tasks.yaml
+
+Kent runs under its own account; this command talks to it through one fixed, audited entry
+point (sudo -u kent kent-exec). Your files are read and written by you, never by Kent.
+"""
+import grp
+import io
+import os
+import subprocess
+import sys
+import tarfile
+from pathlib import Path
+
+EXEC = "/opt/kent-core/libexec/kent-exec"
+PROJECT_FILES = ("project.yaml", "agents.yaml", "tasks.yaml")
+MAX_FILE = 256 * 1024
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"kent: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def check_group() -> None:
+    try:
+        gid = grp.getgrnam("kent-operators").gr_gid
+    except KeyError:
+        die("Kent is not installed (group kent-operators missing)")
+    if gid in os.getgroups() or os.geteuid() == 0:
+        return
+    user = os.environ.get("USER") or os.getlogin()
+    if user in grp.getgrnam("kent-operators").gr_mem:
+        die("you were added to kent-operators, but this login session predates it.\n"
+            "      Log out and back in, or run: newgrp kent-operators")
+    die("you are not a Kent operator. An administrator can add you with: sudo kent-admin add-operator " + user)
+
+
+def kexec(*args: str, stdin=None, stdout=None) -> int:
+    return subprocess.run(["sudo", "-n", "-u", "kent", EXEC, *args], input=stdin, stdout=stdout).returncode
+
+
+def pack_project(src: Path) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name in PROJECT_FILES:
+            p = src / name
+            if not p.is_file() or p.is_symlink():
+                die(f"{p} missing (need {', '.join(PROJECT_FILES)})")
+            data = p.read_bytes()
+            if len(data) > MAX_FILE:
+                die(f"{p} is larger than {MAX_FILE} bytes")
+            info = tarfile.TarInfo(name)
+            info.size, info.mode = len(data), 0o640
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def export(sid: str, dest: Path) -> int:
+    r = subprocess.run(["sudo", "-n", "-u", "kent", EXEC, "export", sid], capture_output=True)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode(errors="replace"))
+        return r.returncode
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r:gz") as tar:
+        tar.extractall(dest, filter="data")          # no absolute paths, links or special files
+    print(f"exported gent {sid} to {dest}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv[:1] in (["-h"], ["--help"], ["help"]):
+        print(__doc__.strip()); return 0
+    check_group()
+    if not argv:
+        os.execvp("sudo", ["sudo", "-n", "-u", "kent", EXEC, "chat"])
+    cmd = argv[0]
+    if cmd == "-q":
+        if len(argv) < 2:
+            die('usage: kent -q "question"', 2)
+        return kexec("ask", stdin=" ".join(argv[1:]).encode())
+    if cmd in ("status", "digest", "audit", "gents"):
+        return kexec(cmd)
+    if cmd == "new":
+        if len(argv) < 2:
+            die("usage: kent new DIR [--name NAME]", 2)
+        src = Path(argv[1]).expanduser().resolve()
+        name = argv[argv.index("--name") + 1] if "--name" in argv else src.name
+        return kexec("new", "--name", name, stdin=pack_project(src))
+    if cmd == "gent":
+        if len(argv) < 3:
+            die("usage: kent gent <action> ID [...]", 2)
+        if argv[1] == "export":
+            dest = Path(argv[3]).expanduser() if len(argv) > 3 else Path.cwd() / f"gent-{argv[2]}"
+            return export(argv[2], dest)
+        return kexec("gent", *argv[1:])
+    die(f"unknown command {cmd!r} (see: kent --help)", 2)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

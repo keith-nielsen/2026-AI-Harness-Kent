@@ -1,0 +1,27 @@
+[Unit]
+Description=Kent SearXNG (metasearch for Kent and Gents)
+Documentation=file:///etc/kent/searxng/settings.yml
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f kent-searxng
+# Runs as the kent-searxng host account (uid/gid from image.env), not the image's root entrypoint.
+ExecStart=/usr/bin/docker run --rm --name kent-searxng --label kent.module=searxng \
+    --user ${SEARXNG_UID}:${SEARXNG_GID} \
+    --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m,uid=${SEARXNG_UID},gid=${SEARXNG_GID} \
+    --tmpfs /var/cache/searxng:rw,nosuid,nodev,size=128m,uid=${SEARXNG_UID},gid=${SEARXNG_GID} \
+    --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m \
+    --publish 127.0.0.1:8888:8080 \
+    --volume /etc/kent/searxng/settings.yml:/etc/searxng/settings.yml:ro \
+    --env-file /etc/kent/searxng/credentials/env \
+    --log-driver journald --log-opt tag=kent-searxng \
+    ${SEARXNG_IMAGE}
+ExecStop=/usr/bin/docker stop -t 10 kent-searxng
+EnvironmentFile=/etc/kent/searxng/image.env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

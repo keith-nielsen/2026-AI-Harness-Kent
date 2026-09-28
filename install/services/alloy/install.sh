@@ -8,7 +8,11 @@
 # Vendor files (/etc/alloy, /etc/default/alloy) are never edited.
 # If Kent installed the package, uninstall purges it and removes the account
 # and /var/lib/alloy the package leaves behind.
-# Usage: sudo ./install.sh [--no-start] [--dry-run]
+# Usage: sudo ./install.sh [--live-debugging] [--no-start] [--dry-run]
+#   --live-debugging  enable the Alloy UI's live debugging (streams log lines through each
+#                     component at http://127.0.0.1:12345). Off unless given: every re-run
+#                     without it turns it off again. The UI has no login; any local account
+#                     that can reach 127.0.0.1:12345 sees the stream.
 # =============================================================================
 set -euo pipefail
 SERVICE="alloy"
@@ -16,9 +20,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 KENT_ROOT="$(cd "$HERE/../../.." && pwd)"
 source "$HERE/../lib-service.sh"
 
-CONF=/etc/kent/alloy; UNIT=alloy.service; DROPIN_DIR=/etc/systemd/system/alloy.service.d; START=1
+CONF=/etc/kent/alloy; UNIT=alloy.service; DROPIN_DIR=/etc/systemd/system/alloy.service.d; START=1; LIVE_DEBUG=0
 while [[ $# -gt 0 ]]; do
-    case "$1" in --no-start) START=0; shift ;; --dry-run) DRY_RUN=1; shift ;; *) die "unknown option: $1" ;; esac
+    case "$1" in --live-debugging) LIVE_DEBUG=1; shift ;; --no-start) START=0; shift ;; --dry-run) DRY_RUN=1; shift ;; *) die "unknown option: $1" ;; esac
 done
 export DRY_RUN; require_root
 audit_event "install started ($*)"
@@ -44,7 +48,15 @@ fi
 
 claim_path path "$CONF"
 ensure_dir "$CONF" 0750 root alloy
-place_file file "$KENT_ROOT/configs/alloy.alloy" "$CONF/config.alloy" 0640 root alloy
+SRC_CONFIG="$KENT_ROOT/configs/alloy.alloy"
+if [[ "$LIVE_DEBUG" -eq 1 ]]; then
+    SRC_CONFIG="$(mktemp)"; trap 'rm -f "$SRC_CONFIG"' EXIT
+    { printf '// live debugging enabled by install.sh --live-debugging\nlivedebugging {\n  enabled = true\n}\n\n'
+      cat "$KENT_ROOT/configs/alloy.alloy"; } > "$SRC_CONFIG"
+    chmod 0644 "$SRC_CONFIG"
+    log "live debugging ON (re-run without --live-debugging to turn it off)"
+fi
+place_file file "$SRC_CONFIG" "$CONF/config.alloy" 0640 root alloy
 [[ "$DRY_RUN" -eq 1 ]] || /usr/bin/alloy validate "$CONF/config.alloy" >/dev/null || die "alloy rejected $CONF/config.alloy"
 
 ensure_dir "$DROPIN_DIR" 0755 root root

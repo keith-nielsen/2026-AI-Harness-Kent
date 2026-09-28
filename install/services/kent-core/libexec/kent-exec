@@ -1,0 +1,185 @@
+#!/usr/bin/python3 -I
+"""kent-exec — Kent's side of the `kent` command. Runs as the kent account, reached only via
+`sudo -u kent` by members of kent-operators (/etc/sudoers.d/92-kent-operators). Every argument
+is validated here; every call is recorded in the audit chain with the calling human."""
+import io
+import json
+import os
+import re
+import secrets
+import subprocess
+import sys
+import tarfile
+import time
+from pathlib import Path
+
+BIN = Path("/opt/kent-core/bin")
+HERMES = "/opt/kent-hermes/bin/kent-hermes"
+KHOME = Path("/var/lib/kent")
+PY = "/usr/bin/python3"
+GENT_ACTIONS = {"status": 0, "logs": 1, "wait": 1, "assess": 0, "pause": 0, "resume": 0, "restart": 0, "destroy": 1}
+PROJECT_FILES = {"project.yaml", "agents.yaml", "tasks.yaml"}
+os.environ.update({"KENT_CONF": "/etc/kent/kent/kent.conf", "HOME": str(KHOME), "LANG": "C.UTF-8",
+                   "PATH": "/opt/kent-core/bin:/usr/bin:/bin"})
+sys.path.insert(0, str(BIN))
+import kentlib  # noqa: E402
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"kent: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def principal() -> str:
+    p = os.environ.get("SUDO_USER", "")
+    return p if re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", p) else "unknown"
+
+
+def audit(event: str, detail: str = "") -> None:
+    try:
+        kentlib.audit(f"human:{principal()}", event, detail)
+    except Exception as e:  # noqa: BLE001 - the action is refused if it cannot be audited
+        die(f"audit chain unavailable ({e}); refusing to act")
+
+
+def tool(name: str, *args: str) -> int:
+    return subprocess.run([PY, str(BIN / name), *args]).returncode
+
+
+def sid_ok(s: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{8}", s):
+        die("Gent id must be 8 hex characters", 2)
+    return s
+
+
+def cmd_status() -> int:
+    c = kentlib.conf()
+    profile = Path("/etc/kent/profile").read_text().strip() if Path("/etc/kent/profile").exists() else "?"
+    print(f"Kent — profile: {profile}   operator: {principal()}")
+    units = ["kent-litellm", "kent-prometheus", "kent-node-exporter", "kent-loki", "alloy", "grafana-server",
+             "kent-gitea", "kent-squid", "kent-searxng"]
+    states = {u: subprocess.run(["systemctl", "is-active", u], capture_output=True, text=True).stdout.strip() for u in units}
+    print("services: " + "  ".join(f"{u.replace('kent-', '')}={'ok' if s == 'active' else s}" for u, s in states.items()))
+    kent_timers = ["kent-poll-learnings", "kent-audit-ingest", "kent-digest", "kent-qa-audit", "kent-audit-anchor"]
+    armed = sum(1 for t in kent_timers if any(ch.isdigit() for ch in subprocess.run(
+        ["systemctl", "show", f"{t}.timer", "-p", "NextElapseUSecRealtime", "--value"],
+        capture_output=True, text=True).stdout))
+    print(f"timers:   {armed}/5 armed")
+    v = subprocess.run([PY, str(BIN / "kent_audit.py"), "verify"], capture_output=True, text=True)
+    print("audit:    " + next((l for l in (v.stdout + v.stderr).splitlines() if not l.startswith("note:")), "?"))
+    print("gents:")
+    sys.stdout.flush()
+    tool("kent_gent.py", "list")
+    digests = sorted((Path(c["KENT_DATA"]) / "digests").glob("*.md"))
+    print(f"digest:   {digests[-1].name if digests else 'none yet'}")
+    return 0
+
+
+def cmd_ask() -> int:
+    q = sys.stdin.buffer.read(64 * 1024 + 1)
+    if not q.strip():
+        die("empty question", 2)
+    if len(q) > 64 * 1024:
+        die("question longer than 64 KiB", 2)
+    f = KHOME / "work" / f"q-{secrets.token_hex(8)}.txt"
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(q)
+    try:
+        r = subprocess.run([HERMES, "chat", "-Q", "--oneshot", "--query-file", str(f)], capture_output=True, text=True)
+        keep = lambda text: "\n".join(l for l in text.splitlines() if not l.startswith("session_id:")).strip()
+        if keep(r.stderr):
+            print(keep(r.stderr), file=sys.stderr)
+        print(keep(r.stdout))
+        return r.returncode
+    finally:
+        f.unlink(missing_ok=True)
+
+
+def cmd_new(args: list[str]) -> int:
+    if len(args) != 2 or args[0] != "--name" or not re.fullmatch(r"[\w .-]{1,64}", args[1]):
+        die("usage: new --name NAME (letters, digits, space, . _ -; max 64)", 2)
+    data = sys.stdin.buffer.read(1024 * 1024 + 1)
+    if len(data) > 1024 * 1024:
+        die("project archive larger than 1 MiB", 2)
+    dest = KHOME / "inbox" / principal() / time.strftime("%Y%m%dT%H%M%S")
+    dest.mkdir(parents=True, mode=0o700)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        members = tar.getmembers()
+        if {m.name for m in members} != PROJECT_FILES or not all(m.isreg() and m.size <= 256 * 1024 for m in members):
+            die(f"project must contain exactly {sorted(PROJECT_FILES)} as regular files", 2)
+        tar.extractall(dest, filter="data")
+    return tool("kent_gent.py", "spawn", "--name", args[1], "--project", str(dest))
+
+
+def cmd_export(args: list[str]) -> int:
+    if len(args) != 1:
+        die("usage: export ID", 2)
+    sid = sid_ok(args[0])
+    c = kentlib.conf()
+    for base in (Path(c["STACKS_DIR"]), Path(c["GENT_ARCHIVE_DIR"])):
+        ws = base / sid / "data" / "workspace"
+        if ws.is_dir():
+            break
+    else:
+        die(f"no workspace for Gent {sid}")
+    buf = io.BytesIO()
+    total = 0
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for p in sorted(ws.rglob("*")):
+            if p.is_file() and not p.is_symlink():
+                total += p.stat().st_size
+                if total > 200 * 1024 * 1024:
+                    die("workspace larger than 200 MiB; publish it to Gitea instead (kent gent assess)")
+                info = tar.gettarinfo(str(p), arcname=str(p.relative_to(ws)))
+                info.uid = info.gid = 0; info.uname = info.gname = ""; info.mode = 0o644
+                with p.open("rb") as fh:
+                    tar.addfile(info, fh)
+    sys.stdout.buffer.write(buf.getvalue())
+    return 0
+
+
+def cmd_gent(args: list[str]) -> int:
+    if len(args) < 2 or args[0] not in GENT_ACTIONS:
+        die(f"usage: gent <{'|'.join(GENT_ACTIONS)}> ID [option]", 2)
+    action, sid, rest = args[0], sid_ok(args[1]), args[2:]
+    allowed = {"logs": ("--tail",), "wait": ("--timeout",), "destroy": ("--purge",)}.get(action, ())
+    if rest and (rest[0] not in allowed or (rest[0] != "--purge" and (len(rest) != 2 or not rest[1].isdigit()))):
+        die(f"unsupported option for gent {action}: {' '.join(rest)}", 2)
+    return tool("kent_gent.py", action, sid, *rest)
+
+
+def cmd_digest() -> int:
+    digests = sorted((Path(kentlib.conf()["KENT_DATA"]) / "digests").glob("*.md"))
+    if not digests:
+        print("No digest yet (written daily at 07:00).")
+        return 0
+    sys.stdout.write(digests[-1].read_text())
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    import pwd
+    if os.geteuid() != pwd.getpwnam("kent").pw_uid:
+        die("kent-exec must run as the kent account (use the kent command)")
+    if not argv:
+        die("no command", 2)
+    cmd, args = argv[0], argv[1:]
+    audit("cli", " ".join([cmd] + [a if len(a) < 80 else a[:80] + "…" for a in args])[:300])
+    if cmd == "chat":
+        os.execv(HERMES, [HERMES])
+    simple = {"ask": cmd_ask, "status": cmd_status, "digest": cmd_digest,
+              "audit": lambda: tool("kent_audit.py", "verify"), "gents": lambda: tool("kent_gent.py", "list")}
+    if cmd in simple:
+        return simple[cmd]()
+    if cmd == "new":
+        return cmd_new(args)
+    if cmd == "export":
+        return cmd_export(args)
+    if cmd == "gent":
+        return cmd_gent(args)
+    die(f"unknown command {cmd!r}", 2)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]) or 0)

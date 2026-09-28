@@ -1,10 +1,10 @@
 #!/usr/bin/python3 -I
-"""kent-destroy-gent <stack_id> [--archive]   (root; operator runs it via sudo)
+"""kent-destroy-gent <stack_id> [--archive]   (root; the kent account runs it via sudo)
 
 Removes everything kent-spawn-gent created for one Gent: container, gateway key
 (access revoked immediately), mounted key, account gent-<id>. Stack data is
 deleted, or with --archive moved to /var/lib/kent-gent/archive/<id>/ and handed to
-root:<operator-group> read-only so Kent can keep reading it. The Gitea repo
+root:kent read-only so Kent can keep reading it. The Gitea repo
 kent/gent-<id> is kept as the permanent record.
 
 Only stacks listed in /var/lib/kent-gent/registry (i.e. created by
@@ -58,8 +58,7 @@ def main() -> None:
             dest.parent.mkdir(mode=0o755, exist_ok=True)
             if dest.exists():
                 die(f"archive {dest} already exists")
-            op = info.get("operator") or os.environ.get("SUDO_USER", "")
-            op_gid = pwd.getpwnam(op).pw_gid
+            op_gid = pwd.getpwnam("kent").pw_gid
             stack.rename(dest)
             for dirpath, dirnames, filenames in os.walk(dest):
                 os.chown(dirpath, 0, op_gid, follow_symlinks=False)

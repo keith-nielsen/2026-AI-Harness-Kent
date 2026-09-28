@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 def conf() -> dict[str, str]:
-    path = Path(os.environ.get("KENT_CONF", Path.home() / ".config/kent/kent.conf"))
+    path = Path(os.environ.get("KENT_CONF", "/etc/kent/kent/kent.conf"))
     out = {}
     for line in path.read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
@@ -136,3 +136,11 @@ def gitea_append_learning(c: dict, stack_id: str, learning_id: int, summary: str
 def gitea_issue(c: dict, repo: str, title: str, body: str) -> int:
     """Open an issue (critical alerts, circuit breaker). Returns the issue number."""
     return _gitea(c, "POST", f"/repos/{repo}/issues", {"title": title[:200], "body": body[:20000]})["number"]
+
+
+def gent_ctl(c: dict, action: str, stack_id: str, *extra: str):
+    """Container operations on a Gent through the root-owned broker (Kent is not in the
+    docker group). action: inspect | logs | stop | start."""
+    import subprocess
+    return subprocess.run(["sudo", "-n", f"{c.get('GENT_BIN', '/opt/kent-gent/bin')}/kent-gent-ctl",
+                           action, stack_id, *extra], capture_output=True, text=True)

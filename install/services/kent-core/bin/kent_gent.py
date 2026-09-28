@@ -71,9 +71,8 @@ def registry(kdb, sid: str):
     return row
 
 
-def container_state(sid: str) -> str:
-    r = subprocess.run(["docker", "inspect", "-f", "{{.State.Status}} exit={{.State.ExitCode}}", f"kent-gent-{sid}"],
-                       capture_output=True, text=True)
+def container_state(sid: str, c: dict | None = None) -> str:
+    r = kentlib.gent_ctl(c or kentlib.conf(), "inspect", sid)
     return r.stdout.strip() if r.returncode == 0 else "absent"
 
 
@@ -151,7 +150,8 @@ def cmd_status(c: dict, a) -> None:
 
 
 def cmd_logs(c: dict, a) -> None:
-    subprocess.run(["docker", "logs", "--tail", str(a.tail), f"kent-gent-{a.id}"])
+    r = kentlib.gent_ctl(c, "logs", a.id, str(a.tail))
+    sys.stdout.write(r.stdout + r.stderr)
 
 
 def cmd_wait(c: dict, a) -> None:
@@ -244,7 +244,7 @@ def cmd_assess(c: dict, a) -> None:
 def cmd_pause(c: dict, a) -> None:
     kdb = kentlib.kent_db(c)
     registry(kdb, a.id)
-    subprocess.run(["docker", "stop", "-t", "30", f"kent-gent-{a.id}"], capture_output=True)
+    kentlib.gent_ctl(c, "stop", a.id)
     kdb.execute("UPDATE stack_registry SET status='paused' WHERE stack_id=?", (a.id,))
     kdb.commit()
     kentlib.audit("kent", "gent_paused", f"stack={a.id}")
@@ -258,7 +258,7 @@ def cmd_resume(c: dict, a) -> None:
     _, inbox = stack_paths(c, a.id)
     token = inbox / f"resume-{int(time.time())}.json"
     token.write_text(json.dumps({"requested_at": now(), "by": "operator"}))
-    r = subprocess.run(["docker", "start", f"kent-gent-{a.id}"], capture_output=True, text=True)
+    r = kentlib.gent_ctl(c, "start", a.id)
     if r.returncode != 0:
         die(f"could not start container: {r.stderr.strip()} (try: kent-gent restart {a.id})")
     kdb.execute("UPDATE stack_registry SET status='active' WHERE stack_id=?", (a.id,))

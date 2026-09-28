@@ -1,12 +1,29 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.0.0
+version: 3.1.0
 date: 2026-09-28
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.1.0
+    date: 2026-09-28
+    summary: >
+      Kent gets its own no-login `kent` account and its own commit-pinned Hermes
+      install (/opt/kent-hermes) with an administrator-owned managed policy (lab or
+      hardened profile). Humans use the `kent` command as themselves (group
+      kent-operators; sudo only to kent-exec, validated and audited); files cross
+      by stream, never shared directories. Kent's timers become system units; Gent
+      containers are reached only through root brokers (spawn, destroy, ctl).
+      SearXNG added for Kent and Gents. Top-level install.sh / uninstall.sh /
+      kent-admin. tirith command scanner pinned; containers run as registered non-root
+      accounts. Partly addresses audit findings F-01 (Kent no longer root-equivalent;
+      the development sudo grant and lab shell remain) and F-06 (each human's use of
+      Kent is attributed in the audit chain). Same day: web calls never fall back to
+      outside vendors (keyless_fallback off); failed gateway calls log their cause;
+      "Kent routing" dashboard; Alloy drops scrape noise and offers opt-in live
+      debugging; sim-routed gateway flavour (prod routing, oracle with tool calls).
   - version: 3.0.0
     date: 2026-09-28
     summary: >
@@ -14,7 +31,7 @@ changelog:
       operator-run llama.cpp server; Claude Opus 5.5 for smart/frontier (no
       DeepSeek); a single identity-authenticated LiteLLM gateway with
       classify-then-route; Gents local-only; Kent as a Hermes profile running as
-      the operator; one system account per service; manifest-driven install
+      the operator (superseded in 3.1.0); one system account per service; manifest-driven install
       modules with verified rollback; Grafana Alloy instead of Promtail; own Squid
       instance for Gent egress; circuit breaker, pause/resume and archive-first
       lifecycle. Unbuilt items are marked Planned. Section numbers kept from 2.3.0.
@@ -109,12 +126,14 @@ check (`docs/conformance.md`); **Planned** = designed, not built yet.
 
 ```
 HUMAN (operator)
-  │  Top authority. Talks to Kent (CLI via Hermes), reads Grafana and Gitea,
-  │  approves anything outside the defaults.
+  │  Top authority. Talks to Kent with the `kent` command (as themselves,
+  │  member of kent-operators), reads Grafana and Gitea, approves anything
+  │  outside the defaults.
   ▼
-KENT (persistent agent — the operator's Hermes "kent" profile)
-  │  Runs as the operator. Owns kent.db, the stack template, Gent spawning,
-  │  frontier access. Calls every tier. Supervises, judges, assesses.
+KENT (persistent agent — its own pinned Hermes, as the `kent` account)
+  │  No login, no docker/sudo group. Owns kent.db, the stack template, Gent
+  │  spawning (through root brokers), frontier access. Calls every tier.
+  │  Supervises, judges, assesses.
   ▼
 GENT (gent-<id8> — one per project, Docker, own Unix user)
   ├── CEO loop (templates/app/gent/main.py): kanban, escalation, validation
@@ -173,7 +192,8 @@ smart and frontier point at the same model today; they will be differentiated la
 |---|---|---|---|
 | prod | `configs/litellm_config.yaml` | `anthropic/claude-opus-5-5` | normal operation (needs an Anthropic key) |
 | dev | `configs/litellm_config.dev.yaml` | the local model | local-only testing |
-| sim | `configs/litellm_config.sim.yaml` | the oracle fixture (`tests/sim/oracle.py`) | end-to-end simulations without a key |
+| sim | `configs/litellm_config.sim.yaml` | the oracle fixture (`tests/sim/oracle.py`) | end-to-end simulations without a key; `auto` serves every tier locally |
+| sim-routed | `configs/litellm_config.sim-routed.yaml` | the oracle fixture, prod routing | try the tiers as they will behave with a key: `auto` sends smart/frontier to the oracle, which can answer with tool calls |
 
 Select with `install/services/litellm/install.sh --config dev|prod|sim`. No
 application code changes: every consumer uses logical names.
@@ -234,8 +254,8 @@ requests.post("http://127.0.0.1:4000/v1/chat/completions",
               json={"model": "auto", "messages": [...]})
 ```
 
-Kent (Hermes profile `kent`) uses provider `custom`, base URL
-`http://127.0.0.1:4000/v1`, model `auto`. Gents reach the gateway at
+Kent's Hermes uses provider `custom`, base URL `http://127.0.0.1:4000/v1`, model
+`auto`, key from `KENT_GATEWAY_KEY` in its managed `.env` (§7.3). Gents reach the gateway at
 `http://172.30.0.1:4000/v1` through a socket bridge (§15).
 
 ---
@@ -333,20 +353,20 @@ build:
 
 | Role | Instance | Runs as / on | Persistence | Key |
 |---|---|---|---|---|
-| Kent | singleton | operator, host (Hermes profile `kent` + user timers) | `~/.local/share/kent/kent.db` | `kent` |
+| Kent | singleton | `kent` account, host (own Hermes + system timers) | `/var/lib/kent/kent.db` | `kent` |
 | Gent CEO | one per project | `gent-<id>`, Docker container `kent-gent-<id>` | `/var/lib/kent-gent/stacks/<id>/data/stack.db` | `gent-<id>` |
 
 ### 7.2 Kent Responsibilities — Live
 
 | Duty | How |
 |---|---|
-| Conversation partner | `kent` (= `hermes -p kent`); SOUL in `templates/app/SOUL.md`; `crew-designer` skill |
+| Conversation partner | `kent` command → `kent-exec` → Kent's Hermes; SOUL in `templates/app/SOUL.md`; `crew-designer` skill; web search via SearXNG (search only: no page-fetch backend yet; `web.keyless_fallback: false` so failed web calls never retry through outside vendors) |
 | Classification of all requests | model `auto` at the gateway |
 | Gent spawn / supervise / retire | `kent-gent spawn|list|status|logs|wait|pause|resume|restart|destroy` |
 | Escalation relay, learning review, circuit breaker | `kent-poll-learnings` (every minute) |
 | Assessment of finished work | `kent-gent assess` (frontier) → `gent_assessments`, workspace published to Gitea |
 | Template commits | confident adoptions appended to `LEARNINGS.md` in `kent/stack-template` |
-| Daily digest | `kent-digest` (07:00) → `~/.local/share/kent/digests/` |
+| Daily digest | `kent-digest` (07:00) → `/var/lib/kent/digests/`; operators read it with `kent digest` |
 | Nightly QA | `kent-qa-audit` (02:00) → `qa_audit_log` |
 | Audit | `kent-audit` (chain), ingest every 5 min, anchor 04:30 |
 
@@ -412,31 +432,36 @@ systematic misroutes feed router tuning.
 ### 9.1 Layout
 
 ```
-~/.local/share/kent/              (operator, 0700)
-├── kent.db                       Kent's estate DB (schemas/kent.sql)
-├── audit/hmac_chain.log          audit chain
-└── digests/YYYY-MM-DD.md
-~/.config/kent/                   (operator, 0700; files 0600)
+/var/lib/kent/                    (kent, 0750)
+├── kent.db                       Kent's estate DB (schemas/kent.sql), 0600
+├── audit/hmac_chain.log          audit chain (0700 dir)
+├── digests/YYYY-MM-DD.md
+├── inbox/<operator>/<time>/      projects handed over by `kent new` (0700)
+├── hermes/                       Kent's Hermes home: sessions, memory, skills, SOUL
+└── work/                         Kent's working directory
+/etc/kent/kent/                   (root:kent 0750; files 0640)
 ├── kent.conf                     paths and URLs for Kent's tools
-└── litellm_{operator,kent}_key, gitea_kent_token, gitea_admin_password,
-    grafana_admin_password, audit_hmac_secret
+└── credentials/                  litellm_kent_key, gitea_kent_token, audit_hmac_secret
+/etc/kent/hermes/managed/         (root:kent) Hermes managed scope: config.yaml, .env
+~<operator>/.config/kent/         (operator, 0700; files 0600) the operator's own
+                                  litellm_operator_key, gitea/grafana admin passwords
 /var/lib/kent-gent/
-├── stacks/<id>/data/             gent-<id>:<operator group> 2750 (setgid)
+├── stacks/<id>/data/             gent-<id>:kent 2750 (setgid)
 │   ├── stack.db                  schemas/stack.sql
 │   ├── project/                  project.yaml, agents.yaml, tasks.yaml, LEARNINGS.md
 │   └── workspace/                deliverables, outputs/, REPORT.md
-├── stacks/<id>/inbox/            <operator>:gent-<id> 0750 — Kent's answers, resume tokens
+├── stacks/<id>/inbox/            kent:gent-<id> 0750 — Kent's answers, resume tokens
 ├── keys/<id>.key                 root:gent-<id> 0440 (mounted read-only)
 ├── registry/<id>                 root 0700 — what kent-destroy-gent may remove
-└── archive/<id>/                 root:<operator group>, read-only copies of retired Gents
+└── archive/<id>/                 root:kent, read-only copies of retired Gents
 ```
 
 ### 9.2 Access Matrix
 
 | | kent.db | Gent stack.db / workspace | Gent inbox |
 |---|---|---|---|
-| Human | R/W | R | R/W |
-| Kent (operator) | R/W | **R only** (group read, SQLite `mode=ro`) | W (answers, tokens) |
+| Human | through `kent` only | through `kent gent export` (a copy, owned by the human) | none |
+| Kent (`kent`) | R/W | **R only** (group read, SQLite `mode=ro`) | W (answers, tokens) |
 | Gent | none | R/W (own only) | R (mounted read-only) |
 
 ### 9.3 Main Tables
@@ -530,7 +555,11 @@ Planned: key rotation, container image scanning.
   or Gitea's `*_URI` file settings; never environment variables or config files.
 - The Anthropic key is exported only inside the gateway process by its start
   wrapper (LiteLLM's provider reads the environment).
-- Operator copies needed by Kent's tools are in `~/.config/kent/` (0600).
+- Kent's own credentials (gateway key, Gitea token, audit HMAC secret) are in
+  `/etc/kent/kent/credentials/` (root:kent 0640); Hermes gets the gateway key through
+  its managed `.env` (root:kent 0640), which Kent cannot modify.
+- An operator's own credentials (operator gateway key, admin passwords) are in
+  `~/.config/kent/` (0600). No Kent credential is in an operator's home.
 - A Gent's key is a read-only bind mount at `/run/kent/gent_key`; its hash is in the registry.
 - Nothing secret is committed; `.gitignore` excludes secrets and local settings.
 
@@ -540,19 +569,37 @@ Planned: key rotation, container image scanning.
 
 | Account | Created by | Runs |
 |---|---|---|
-| operator (e.g. `administrator`) | — | Kent (Hermes), Kent's user timers, llama-server |
+| operator (e.g. `administrator`), in `kent-operators` | — | the `kent` command, llama-server |
+| `kent` | hermes module | Kent (its own Hermes), Kent's 5 system timers |
 | `litellm` | litellm module | gateway |
 | `prometheus`, `node_exporter`, `loki` | their modules | metrics and logs |
 | `alloy` | Alloy apt package (installed by Kent) | log shipping |
 | `grafana` | Grafana package (pre-existing) | dashboards |
 | `gitea` | gitea module | forge |
 | `kent-squid` | gent module | Gent egress proxy |
+| `kent-searxng` | searxng module | SearXNG container (`--user`, never root) |
 | `gent-<id>` | `kent-spawn-gent`, removed by `kent-destroy-gent` | one Gent container |
-| DynamicUser | systemd | the two Gent bridge socket proxies |
+| DynamicUser | systemd | the three Gent bridge socket proxies |
 
-No shared account. The operator runs exactly two root tools without a password
-(`/etc/sudoers.d/91-kent-gent`: `kent-spawn-gent`, `kent-destroy-gent`), both
-root-owned and argument-validated. Full detail: `docs/privilege-map.md`.
+No shared account, and no one logs in as `kent`. Two sudo rules make up the whole
+privilege surface: `%kent-operators ALL=(kent) NOPASSWD: kent-exec` (the only way
+into Kent; validates arguments, records `human:<name>` in the audit chain), and
+`kent ALL=(root) NOPASSWD:` the root-owned, argument-validated brokers
+`kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl`. Full detail:
+`docs/privilege-map.md`.
+
+### 14.1 Profiles
+
+`/etc/kent/profile` selects Kent's Hermes policy, rendered from
+`configs/hermes/base.yaml` + `profile-<name>.yaml` into the managed scope:
+
+| | lab (development) | hardened (deployment) |
+|---|---|---|
+| Toolsets | incl. terminal, code execution, delegation | no code execution, no delegation |
+| Shell | general shell as `kent` (approval for dangerous commands) | plus denies for sudo, curl/wget, `python -c`, nc |
+| Both | tirith pre-exec scanning (pinned binary; fails open in lab, **closed** in hardened); one-shot and cron runs deny dangerous commands; yolo/oneshot re-entry, docker, managed-scope and credential paths denied; update checks off; secrets redacted | |
+
+Switch with `sudo ./kent-admin profile lab|hardened`.
 
 ---
 
@@ -563,6 +610,7 @@ root-owned and argument-validated. Full detail: `docs/privilege-map.md`.
 ```
 Gent container ── kent-gent-net (internal, 172.30.0.0/24, bridge kent-gent0; no route out)
    ├─► 172.30.0.1:4000 ── kent-gent-gateway.socket ─► 127.0.0.1:4000 (gateway)
+   ├─► 172.30.0.1:8888 ── kent-gent-search.socket  ─► 127.0.0.1:8888 (kent-searxng) ─► search engines
    └─► 172.30.0.1:3129 ── kent-gent-egress.socket  ─► 127.0.0.1:3129 (kent-squid) ─► internet
 ```
 
@@ -577,6 +625,7 @@ Squid instance (own account and config); the vendor `squid.service` is untouched
 | private, loopback, link-local, CGN, multicast addresses; `.localhost/.local/.internal/.lan/.home.arpa` | denied |
 | any other method | denied |
 | gateway | via its own bridge, key-scoped |
+| search | SearXNG JSON API via its own bridge (Kent's instance: pinned image, read-only, no capabilities) |
 | Gitea, Grafana, Prometheus, Loki, LAN | unreachable |
 
 ### 15.3–15.4 POST Allowlist, Anomaly Detection, Access Requests — Planned
@@ -590,7 +639,7 @@ payload anomaly logging.
 
 Deferred by decision: the host firewall will be hardened later. Kent adds only
 two UFW rules when UFW is active, allowing inbound on `kent-gent0` to
-`172.30.0.1` ports 3129 and 4000 (recorded, removed on uninstall). Every Kent
+`172.30.0.1` ports 3129, 4000 and 8888 (recorded, removed on uninstall). Every Kent
 service listens on 127.0.0.1 (or the Gent bridge address); the conformance
 check verifies nothing is exposed beyond that.
 
@@ -602,11 +651,19 @@ check verifies nothing is exposed beyond that.
 |---|---|---|---|
 | Prometheus | 3.15.0 | 127.0.0.1:9090 | 30 d / 5 GB retention; scrapes prometheus, node, litellm (`metrics` key), loki, alloy, grafana, gitea |
 | node_exporter | 1.12.1 | 127.0.0.1:9100 | host metrics |
-| Loki | 3.7.8 | 127.0.0.1:3100 | tsdb v13, 30 d retention |
-| Grafana Alloy | 1.20.0 (apt) | 127.0.0.1:12345 | journald → Loki; labels `unit`, `identity`, `kent_event` |
-| Grafana | 13.1.0 (vendor package) | 127.0.0.1:3001 | provisioned datasources; "Kent overview" dashboard (calls by identity, denials, router decisions, targets, CPU, memory, gateway log); no anonymous access |
+| Loki | 3.7.8 | 127.0.0.1:3100 | tsdb v13, 30 d retention; logs its own events at `warn` |
+| Grafana Alloy | 1.20.0 (apt) | 127.0.0.1:12345 | journald → Loki; labels `unit`, `level`, `identity`, `kent_event`; drops Prometheus-scrape request lines (Gitea `GET /metrics`); live debugging opt-in (`alloy/install.sh --live-debugging`, off on any re-run without it) |
+| Grafana | 13.1.0 (vendor package) | 127.0.0.1:3001 | provisioned datasources; dashboards "Kent overview" (calls by identity, denials, router decisions, targets, CPU, memory, gateway log) and "Kent routing" (tier decisions, escalation outcomes, fallbacks, failure reasons, p95 latency, tokens per identity, backends); Logs/Metrics Drilldown apps; no anonymous access |
 
 Gent containers log to journald (`kent-gent-<id>`), so they reach Loki too.
+
+Every gateway call is one JSON line (`kent_event: llm_call`: identity, model group, routed tier and
+routing cause, backend, tokens, latency); failed calls also carry `error_class` and `error`, so a
+silent fallback to the local tier always records its cause. Operator guide with tested queries:
+`docs/observability-guide.html`.
+
+Known gap: Loki and the Alloy UI have no per-account access control; any local account (including
+`kent` in the lab profile) can read the whole journal through them.
 
 Alerting: critical events (circuit breaker, audit-chain break) open Gitea issues
 and write crit-level journal entries; the daily digest summarises gateway use,
@@ -624,7 +681,7 @@ Loki 30 days, Prometheus 30 days / 5 GB, journald system defaults. The audit cha
 
 ### 18.2 Audit Chain — Live
 
-`~/.local/share/kent/audit/hmac_chain.log`: each entry
+`/var/lib/kent/audit/hmac_chain.log`: each entry
 `timestamp|entity|event|detail|HMAC-SHA256(secret, previous_hmac|entry)`,
 appended under a file lock with fsync. `kent-audit anchor` (daily 04:30 and at
 every install) verifies the chain and writes `chain=<id> count=N last=<hmac>` to
@@ -726,18 +783,18 @@ SSDs that stall writes during TRIM.
 | Stuck or crashed Gent | heartbeat, requeue on restart, circuit breaker, pause/resume |
 | Install drift / leftovers | manifests; verified rollback to the pre-install snapshot |
 | Slow local model | per-project effort caps; small tasks; cloud tiers for Kent |
-| Hermes release cadence | Kent only adds a profile; the operator controls Hermes upgrades |
+| Hermes release cadence | Kent pins Hermes by tag, commit and `uv.lock` hash; upgrades are a reviewed change to `versions.env` |
 
 ---
 
 ## 25. Post-Install Checklist
 
-1. `python3 tests/conformance/conformance.py` → 0 FAIL.
-2. `kent` → ask a question → answered through the gateway (`kent-digest` shows the call).
+1. `sudo ./kent-admin conformance` → 0 FAIL.
+2. `kent -q "Who are you?"` → answered through the gateway (`kent digest` shows the call).
 3. Grafana `http://127.0.0.1:3001` (password in `~/.config/kent/grafana_admin_password`) → "Kent overview" populated.
 4. Gitea `http://127.0.0.1:3000` → `kent/stack-template` exists and is private.
-5. `tests/gent/run_tools_selftest.sh` → 0 failures (isolation and proxy policy).
-6. Spawn a tiny Gent (`kent-gent spawn`), `kent-gent wait`, `kent-gent assess`, `kent-gent destroy` → registry shows it archived.
-7. `kent-audit verify` → chain valid.
-8. `systemctl --user list-timers 'kent-*'` → 5 timers.
-9. When an Anthropic key is added: `install.sh --config prod`, `--set-fallback-timeout 120`, re-run step 1.
+5. `tests/gent/run_tools_selftest.sh` → 0 failures (isolation, proxy policy, search bridge).
+6. A tiny Gent: `kent new DIR`, `kent gent wait ID`, `kent gent export ID ./out`, `kent gent assess ID`, `kent gent destroy ID` → `kent gents` shows it archived.
+7. `kent audit` → chain valid.
+8. `systemctl list-timers 'kent-*'` → 5 timers.
+9. When an Anthropic key is added: `sudo ./kent-admin set-anthropic-key`, `sudo ./kent-admin config prod`, `sudo install/services/litellm/install.sh --set-fallback-timeout 120`, re-run step 1.

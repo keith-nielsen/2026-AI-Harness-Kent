@@ -1,0 +1,130 @@
+# /etc/kent/litellm/config.yaml (sim-routed flavour)
+# Kent — SIMULATION gateway with PRODUCTION routing. Used only to try the tiers the way
+# they will behave once an Anthropic key is installed (install.sh --config sim-routed);
+# never for normal operation.
+#
+# Same as the prod config except that the ORACLE fixture (tests/sim/oracle.py,
+# 127.0.0.1:4010) stands in for Claude Opus 5.5: "auto" routes fast -> local,
+# smart -> oracle, frontier -> oracle, exactly as prod routes to Anthropic.
+# The oracle model name carries the tier (oracle-smart / oracle-frontier) so each
+# queued request shows which tier sent it. The oracle can answer with tool calls,
+# so the caller's agent loop runs as it would against the real model. Unlike "sim",
+# Kent's interactive agent loop also reaches the oracle when classified up.
+# On oracle timeout or failure the usual fallback to the local fast tier applies.
+
+model_list:
+  # --- Classify-then-route entry point ---
+  - model_name: "auto"
+    litellm_params:
+      model: "auto_router/complexity_router"
+      complexity_router_config:
+        classifier_type: "llm"
+        classifier_llm_config:
+          model: "router"
+          # Local model on the 2060: allow for prefill of the rubric + request.
+          timeout_ms: 15000
+        tier_definitions:
+          - name: "fast"
+            description: >-
+              Routine, mechanical requests with an obvious answer: formatting,
+              extraction, short factual lookups, simple rewrites, running a
+              single well-specified command, summarising short text.
+          - name: "smart"
+            description: >-
+              Ordinary engineering and knowledge work that needs some reasoning:
+              writing or editing code, debugging with clear symptoms, multi-step
+              but well-scoped tasks, explanations that need judgement.
+          - name: "frontier"
+            description: >-
+              Hard or high-stakes work: open-ended design and architecture,
+              subtle debugging, novel problems, long multi-part reasoning, or
+              anything where a wrong answer is costly.
+        tiers:
+          fast: "fast"
+          smart: "smart"
+          frontier: "frontier"
+        # Unclassifiable or failed classification goes to the most capable
+        # tier ("when in doubt, escalate").
+        fallback_tier: "frontier"
+
+  # --- T0 Router (local; shares the llama.cpp server until a dedicated router model runs) ---
+  - model_name: "router"
+    litellm_params:
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
+
+  # --- T1 Fast (local — routine commands) ---
+  - model_name: "fast"
+    litellm_params:
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
+
+  # --- T2 Smart (SIM: oracle) ---
+  - model_name: "smart"
+    litellm_params:
+      model: "openai/oracle-smart"
+      api_base: "http://127.0.0.1:4010/v1"
+      api_key: "sk-oracle-sim"
+      # Hermes sends reasoning_effort, which the openai/ provider rejects for an
+      # unknown model; without this every call fails at once and falls back to fast.
+      drop_params: true
+      timeout: 1800
+      stream_timeout: 1800
+
+  # --- T3 Frontier (SIM: oracle) ---
+  - model_name: "frontier"
+    litellm_params:
+      model: "openai/oracle-frontier"
+      api_base: "http://127.0.0.1:4010/v1"
+      api_key: "sk-oracle-sim"
+      # Hermes sends reasoning_effort, which the openai/ provider rejects for an
+      # unknown model; without this every call fails at once and falls back to fast.
+      drop_params: true
+      timeout: 1800
+      stream_timeout: 1800
+
+router_settings:
+  routing_strategy: "simple-shuffle"
+  num_retries: 1
+  # If a call fails, answer from the local fast tier instead of erroring.
+  # Fallbacks match the model name the caller asked for, so "auto" needs its
+  # own entry (otherwise a request routed to a failing tier returns 500).
+  fallbacks:
+    - smart: ["fast"]
+    - frontier: ["fast"]
+    - auto: ["fast"]
+  # Fall back immediately on timeouts and auth/bad-request errors; retry
+  # once only where a retry can help (rate limits, provider 5xx). Without
+  # this, num_retries multiplies the time before fallback.
+  retry_policy:
+    TimeoutErrorRetries: 0
+    AuthenticationErrorRetries: 0
+    BadRequestErrorRetries: 0
+    ContentPolicyViolationErrorRetries: 0
+    RateLimitErrorRetries: 1
+    InternalServerErrorRetries: 1
+  # Local generation on the 2060 runs ~35 tok/s; long answers need headroom.
+  timeout: 1800
+
+# Identity-based access, no database: kent_gateway (install/services/litellm/
+# kent_gateway.py) maps each key to an identity (operator / kent / gent) and
+# the tiers it may call, and logs every call and every denial as JSON to stdout.
+# Both LiteLLM switches below are required for LiteLLM to enforce the model
+# list; kent_gateway also enforces it itself.
+general_settings:
+  custom_auth: "kent_gateway.user_api_key_auth"
+  custom_auth_run_common_checks: true
+
+litellm_settings:
+  enable_post_custom_auth_checks: true
+  # activity_logger: per-call JSON to journald; prometheus: /metrics/ for Prometheus
+  # (scraped with the "metrics" identity key).
+  callbacks: ["kent_gateway.activity_logger", "prometheus"]

@@ -37,6 +37,7 @@ HASHED_PATHS=(
     "${OPERATOR_HOME}/.config/kent"
     "${OPERATOR_HOME}/.hermes/profiles/kent/config.yaml"
     /var/lib/kent
+    /var/lib/kent-install
 )
 # Paths listed with mode/owner/size only (large trees, e.g. venvs, state).
 LISTED_PATHS=(

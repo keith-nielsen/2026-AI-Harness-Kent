@@ -1,0 +1,8 @@
+# Profile "lab": development and experimentation. Kent keeps a general-purpose shell (as the
+# unprivileged `kent` account: no access to human homes, root or Docker).
+platform_toolsets:
+  cli: [clarify, todo, memory, session_search, skills, web, file, terminal, code_execution, delegation]
+terminal:
+  backend: local
+approvals:
+  mode: manual

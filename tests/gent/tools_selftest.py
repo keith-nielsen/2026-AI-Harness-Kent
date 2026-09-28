@@ -52,6 +52,7 @@ for url in ["http://127.0.0.1:3000/", "http://192.168.1.1/", "http://169.254.169
     r = call(tools.read_web_page, url=url)
     check(f"internal target refused: {url}", any(k in r.lower() for k in ("error", "403", "denied", "only http")), r)
 r = call(tools.web_search, query="kernel.org releases.json")
-check("web search via proxy returns results", "http" in r and "error" not in r[:20].lower(), r)
+check("web search (SearXNG JSON via bridge) returns results", "http" in r and "error" not in r[:20].lower(), r)
+check("web search used SearXNG, not HTML scraping", tools._searxng("linux kernel") is not None, "SearXNG unreachable")
 print(f"\n{len(fails)} failure(s)")
 sys.exit(1 if fails else 0)

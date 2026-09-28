@@ -27,7 +27,7 @@ from pathlib import Path
 
 
 def conf() -> dict[str, str]:
-    path = Path(os.environ.get("KENT_CONF", Path.home() / ".config/kent/kent.conf"))
+    path = Path(os.environ.get("KENT_CONF", "/etc/kent/kent/kent.conf"))
     out = {}
     for line in path.read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
@@ -99,11 +99,32 @@ def parse_anchor(line: str) -> dict | None:
         return None          # alert lines etc. share the tag; they are not anchors
 
 
+ANCHOR_SOURCE_OK = True   # set False when no anchor source could be read (reported by verify)
+
+
 def journal_anchors() -> list[dict]:
-    import subprocess
-    out = subprocess.run(["journalctl", "-t", ANCHOR_TAG, "-o", "cat", "--no-pager"],
-                         capture_output=True, text=True).stdout
-    return [a for a in map(parse_anchor, out.splitlines()) if a]
+    """Anchors, oldest first. Read from Loki (Alloy ships the journal there), because Kent's
+    unprivileged account cannot read the system journal; journalctl is the fallback for
+    privileged callers. An unreadable source is reported, never treated as "no anchors"."""
+    global ANCHOR_SOURCE_OK
+    import json, subprocess, time, urllib.parse, urllib.request
+    lines: list[str] = []
+    try:
+        url = os.environ.get("KENT_LOKI_URL") or conf().get("LOKI_URL", "http://127.0.0.1:3100")
+        q = urllib.parse.urlencode({"query": f'{{syslog_identifier="{ANCHOR_TAG}"}}', "limit": "5000",
+                                    "start": str(time.time_ns() - 30 * 86400 * 10**9), "direction": "forward"})
+        with urllib.request.urlopen(f"{url}/loki/api/v1/query_range?{q}", timeout=10) as r:
+            vals = [v for s in json.load(r)["data"]["result"] for v in s["values"]]
+        lines = [line for _, line in sorted(vals, key=lambda v: int(v[0]))]
+    except Exception:  # noqa: BLE001 - fall back to the journal
+        try:
+            out = subprocess.run(["journalctl", "-t", ANCHOR_TAG, "-o", "cat", "--no-pager"],
+                                 capture_output=True, text=True, timeout=30)
+            lines = out.stdout.splitlines()
+            ANCHOR_SOURCE_OK = out.returncode == 0
+        except Exception:  # noqa: BLE001
+            ANCHOR_SOURCE_OK = False
+    return [a for a in map(parse_anchor, lines) if a]
 
 
 def latest_anchor(cid: str | None = None, anchors: list[dict] | None = None) -> tuple[int, str] | None:
@@ -137,6 +158,8 @@ def main(argv: list[str]) -> int:
         anchors = journal_anchors()
         problems = verify(log, secret) + check_anchor(log, latest_anchor(cid, anchors))
         n = len(log.read_text().splitlines()) if log.exists() else 0
+        if not ANCHOR_SOURCE_OK:
+            print("note: no anchor source readable (Loki and journal unavailable); truncation cannot be checked")
         others = sorted({a["chain"] for a in anchors} - {cid})
         if others:
             print(f"note: journal also holds anchors of {len(others)} earlier chain(s) "

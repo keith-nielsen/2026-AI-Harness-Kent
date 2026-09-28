@@ -75,6 +75,9 @@ model_list:
       model: "openai/oracle-opus"
       api_base: "http://127.0.0.1:4010/v1"
       api_key: "sk-oracle-sim"
+      # Hermes sends reasoning_effort, which the openai/ provider rejects for an
+      # unknown model; without this every call fails at once and falls back to fast.
+      drop_params: true
       timeout: 1800
       stream_timeout: 1800
 
@@ -84,6 +87,9 @@ model_list:
       model: "openai/oracle-opus"
       api_base: "http://127.0.0.1:4010/v1"
       api_key: "sk-oracle-sim"
+      # Hermes sends reasoning_effort, which the openai/ provider rejects for an
+      # unknown model; without this every call fails at once and falls back to fast.
+      drop_params: true
       timeout: 1800
       stream_timeout: 1800
 

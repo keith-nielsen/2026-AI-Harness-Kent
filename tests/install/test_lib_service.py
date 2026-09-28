@@ -117,3 +117,10 @@ def test_uninstall_disables_kent_enabled_vendor_unit_before_purge(tmp_path):
     out = r.stdout
     assert "systemctl disable --now alloy.service" in out
     assert out.index("systemctl disable --now alloy.service") < out.index("apt-get purge")
+
+
+def test_uninstall_removes_group_membership_it_added(tmp_path):
+    user = os.environ.get("USER", "root")
+    grp = subprocess.run(["id", "-gn"], capture_output=True, text=True).stdout.strip()
+    r = sh(tmp_path, "uninstall_module", f"member {grp} {user}\n")
+    assert f"gpasswd -d {user} {grp}" in r.stdout

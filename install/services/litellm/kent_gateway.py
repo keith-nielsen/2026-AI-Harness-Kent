@@ -199,6 +199,10 @@ class KentActivityLogger(CustomLogger):
             "latency_s": round((end_time - start_time).total_seconds(), 3) if start_time and end_time else None,
             "call_id": slp.get("id"),
         }
+        if status == "failure":  # why it failed (a silent fallback otherwise hides the cause)
+            err = slp.get("error_information") or {}
+            record["error_class"] = err.get("error_class")
+            record["error"] = str(err.get("error_message") or slp.get("error_str") or "")[:300]
         print(json.dumps(record, default=str), file=sys.stdout, flush=True)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):

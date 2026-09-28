@@ -41,6 +41,13 @@ loki.source.journal "system" {
 loki.process "kent" {
   forward_to = [loki.write.local.receiver]
 
+  // Prometheus scrapes Gitea's /metrics every 15 s and Gitea's router logs each one
+  // (240 lines/h of noise). Drop only those lines; real web/git requests stay.
+  stage.drop {
+    expression          = "router: completed GET /metrics for 127\\.0\\.0\\.1:"
+    drop_counter_reason = "prometheus_scrape"
+  }
+
   stage.match {
     selector = "{unit=\"kent-litellm.service\"} |= \"kent_event\""
 

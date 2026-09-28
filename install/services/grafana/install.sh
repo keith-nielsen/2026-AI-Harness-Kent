@@ -47,7 +47,9 @@ if [[ ! -s "$CONF/credentials/admin_password" ]]; then
     else (umask 077; openssl rand -base64 24 | tr -d '\n=/+' > "$CONF/credentials/admin_password"); fi
 fi
 run install -d -m 0750 -o root -g grafana "$CONF/dashboards"
-run install -m 0640 -o root -g grafana "$KENT_ROOT/configs/grafana/kent-overview.json" "$CONF/dashboards/kent-overview.json"
+for dash in "$KENT_ROOT"/configs/grafana/kent-*.json; do
+    run install -m 0640 -o root -g grafana "$dash" "$CONF/dashboards/$(basename "$dash")"
+done
 
 place_file file "$KENT_ROOT/configs/grafana/datasources.yaml" "$PROV/datasources/kent.yaml" 0640 root grafana
 place_file file "$KENT_ROOT/configs/grafana/dashboards.yaml" "$PROV/dashboards/kent.yaml" 0640 root grafana

@@ -10,12 +10,14 @@
 #            (the vendor squid.service is neither used nor modified)
 #   bridges  kent-gent-egress.socket   172.30.0.1:3129 -> 127.0.0.1:3129 (proxy)
 #            kent-gent-gateway.socket  172.30.0.1:4000 -> 127.0.0.1:4000 (LiteLLM)
+#            kent-gent-search.socket   172.30.0.1:8888 -> 127.0.0.1:8888 (SearXNG, JSON search)
 #            systemd-socket-proxyd, DynamicUser; the ONLY host services a Gent can reach
 #   firewall if UFW is active: two allow rules, inbound on kent-gent0 to exactly
 #            those two ports (removed on uninstall)
 #   image    kent-gent:current  (pinned base digest, hash-locked deps, see image/)
 #   tools    /opt/kent-gent/bin/kent-{spawn,destroy}-gent, run by the operator via
-#            /etc/sudoers.d/91-kent-gent (exactly those two commands, NOPASSWD)
+#            + kent-gent-ctl (container inspect/logs/stop/start), run by the kent account via
+#            /etc/sudoers.d/91-kent-gent (exactly those three commands, NOPASSWD)
 #   state    /var/lib/kent-gent/{stacks,keys,registry,archive}
 #   keys     /etc/kent/litellm/gent-keys/<id>.key  (read by the gateway; identity gent-<id>)
 #
@@ -34,19 +36,22 @@ NET=kent-gent-net; SUBNET=172.30.0.0/24; GW_IP=172.30.0.1; BRIDGE=kent-gent0
 OPT=/opt/kent-gent; STATE=/var/lib/kent-gent; SQUID_CONF=/etc/kent/squid
 GW_KEYS=/etc/kent/litellm/gent-keys; SUDOERS=/etc/sudoers.d/91-kent-gent
 IMAGE=kent-gent; START=1
-UNITS=(kent-squid.service kent-gent-egress.socket kent-gent-egress.service kent-gent-gateway.socket kent-gent-gateway.service)
+UNITS=(kent-squid.service kent-gent-egress.socket kent-gent-egress.service kent-gent-gateway.socket kent-gent-gateway.service
+       kent-gent-search.socket kent-gent-search.service)
 while [[ $# -gt 0 ]]; do
     case "$1" in --no-start) START=0; shift ;; --dry-run) DRY_RUN=1; shift ;; *) die "unknown option: $1" ;; esac
 done
 export DRY_RUN; require_root
-OP="$(operator_user)"
+OP=kent   # Kent calls the brokers; humans use the kent command
 audit_event "install started ($*)"
 
 log "preflight"
 systemctl is-active --quiet docker || die "docker is not running"
+getent passwd kent >/dev/null || die "hermes module not installed (kent account missing)"
 getent group litellm >/dev/null || die "litellm module not installed (group litellm missing)"
 [[ -d /etc/kent/litellm ]] || die "litellm module not installed"
 [[ -s /etc/kent/gitea/credentials/admin_password ]] || die "gitea module not installed"
+[[ -f /etc/systemd/system/kent-searxng.service ]] || die "searxng module not installed"
 [[ -x /usr/sbin/squid ]] || ensure_package squid
 [[ -x /usr/lib/systemd/systemd-socket-proxyd ]] || die "systemd-socket-proxyd missing"
 # Only the loopback listener matters (the bridge socket on 172.30.0.1:3129 is ours).
@@ -73,17 +78,17 @@ claim_path path "$OPT"
 ensure_dir "$OPT" 0755 root root
 ensure_dir "$OPT/bin" 0755 root root
 ensure_dir "$OPT/share" 0755 root root
-for t in kent-spawn-gent kent-destroy-gent; do
+for t in kent-spawn-gent kent-destroy-gent kent-gent-ctl; do
     place_file file "$HERE/bin/$t" "$OPT/bin/$t" 0755 root root
 done
 place_file file "$KENT_ROOT/schemas/stack.sql" "$OPT/share/stack.sql" 0644 root root
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cat > "$WORK/sudoers" <<EOF
-# Kent: the operator (and Kent, running as the operator) may spawn and destroy
-# Gents. Both tools are root-owned and validate every argument. Installed by
+# Kent (the kent account) may spawn, control and destroy Gents. The tools are
+# root-owned and validate every argument. Installed by
 # install/services/gent/install.sh; removed by its uninstall.
-$OP ALL=(root) NOPASSWD: $OPT/bin/kent-spawn-gent, $OPT/bin/kent-destroy-gent
+$OP ALL=(root) NOPASSWD: $OPT/bin/kent-spawn-gent, $OPT/bin/kent-destroy-gent, $OPT/bin/kent-gent-ctl
 EOF
 visudo -cf "$WORK/sudoers" >/dev/null || die "sudoers syntax check failed"
 place_file file "$WORK/sudoers" "$SUDOERS" 0440 root root
@@ -130,7 +135,7 @@ run systemctl daemon-reload
 
 # --- Firewall (only if UFW is active; default INPUT policy drops bridge traffic) ------
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "^Status: active"; then
-    for port in 3129 4000; do
+    for port in 3129 4000 8888; do
         rule="allow in on $BRIDGE to $GW_IP port $port proto tcp"
         run ufw $rule comment "kent-gent" >/dev/null
         manifest_add ufwrule "$rule"
@@ -140,7 +145,7 @@ else
 fi
 
 if [[ "$START" -eq 1 ]]; then
-    run systemctl enable --now kent-squid.service kent-gent-egress.socket kent-gent-gateway.socket
+    run systemctl enable --now kent-squid.service kent-gent-egress.socket kent-gent-gateway.socket kent-gent-search.socket
     run systemctl restart kent-squid.service
 fi
 
@@ -165,6 +170,7 @@ P = {"http": "http://172.30.0.1:3129", "https": "http://172.30.0.1:3129"}
 out["proxy_web"] = st(lambda: requests.get("https://example.com/", proxies=P, timeout=20).status_code)
 out["proxy_gitea"] = st(lambda: requests.get("http://127.0.0.1:3000/", proxies=P, timeout=10).status_code)
 out["host_gitea"] = st(lambda: socket.create_connection(("172.30.0.1", 3000), timeout=5) and "OPEN")
+out["search"] = st(lambda: len(requests.get("http://172.30.0.1:8888/search", params={"q": "linux", "format": "json"}, timeout=20).json()["results"]) > 0)
 print(out)' 2>&1 | tail -1)"
     log "isolation probe: $probe"
     [[ "$probe" == *"'direct_internet': 'OSError'"* || "$probe" == *"'direct_internet': 'TimeoutError'"* ]] \
@@ -173,6 +179,7 @@ print(out)' 2>&1 | tail -1)"
     [[ "$probe" == *"'proxy_web': '200'"* ]] || die "Gent network cannot use the egress proxy: $probe"
     [[ "$probe" == *"'proxy_gitea': '403'"* ]] || die "proxy lets a Gent reach host services: $probe"
     [[ "$probe" != *"'host_gitea': 'OPEN'"* ]] || die "Gent network reaches host port 3000 directly: $probe"
+    [[ "$probe" == *"'search': 'True'"* ]] || die "Gents cannot reach Kent's SearXNG through the bridge: $probe"
     log "OK: Gent network isolated (no direct egress, gateway + proxy only)"
 fi
 audit_event "install completed"

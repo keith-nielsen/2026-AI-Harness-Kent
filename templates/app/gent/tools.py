@@ -31,9 +31,27 @@ def _text(html_src: str, limit: int = 6000) -> str:
     return t[:limit] + (" [truncated]" if len(t) > limit else "")
 
 
+SEARXNG_URL = os.environ.get("SEARXNG_URL", "")
+
+
+def _searxng(query: str) -> str | None:
+    """Kent's SearXNG through the Gent bridge: a structured JSON API (no HTML scraping)."""
+    try:
+        r = requests.get(f"{SEARXNG_URL}/search", params={"q": query, "format": "json"},
+                         timeout=TIMEOUT, proxies={"http": None, "https": None})
+        r.raise_for_status()
+        items = r.json().get("results", [])[:8]
+    except (requests.RequestException, ValueError):
+        return None
+    return "\n".join(f"- {_text(i.get('title', ''), 200)}\n  {i.get('url', '')}\n  {_text(i.get('content', ''), 400)}"
+                     for i in items) or f"no results for: {query}"
+
+
 @tool("Web Search")
 def web_search(query: str) -> str:
     """Search the web. Returns up to 8 results as title, URL and snippet."""
+    if SEARXNG_URL and (res := _searxng(query)) is not None:
+        return res
     try:
         r = requests.get("https://html.duckduckgo.com/html/", params={"q": query},
                          headers={"User-Agent": UA}, timeout=TIMEOUT)

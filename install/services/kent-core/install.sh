@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Kent — install/services/kent-core/install.sh
-# Kent itself (the operator-level agent), on top of the user's Hermes install:
-#   tools    /opt/kent-core/bin (root-owned; audit chain, digest, learnings/
-#            escalation relay, QA audit) + launchers in ~/.local/bin
-#   config   ~/.config/kent/kent.conf, audit HMAC secret
-#   data     ~/.local/share/kent/{kent.db, audit/, digests/, stacks/}
-#   timers   systemd --user: audit-ingest & poll-learnings (5 min), digest 07:00,
+# Kent's tools, data and schedules, running as the kent account (created by the hermes module):
+#   tools    /opt/kent-core/bin (audit chain, digest, learnings/escalation relay + circuit
+#            breaker, QA audit, kent-gent) and the human-facing `kent` command
+#            (/usr/local/bin/kent → /opt/kent-core/bin/kent)
+#   entry    /opt/kent-core/libexec/kent-exec — Kent's side of `kent`, reachable only through
+#            /etc/sudoers.d/92-kent-operators (%kent-operators may run it as kent, nothing else)
+#   config   /etc/kent/kent/kent.conf, credentials/ (Kent's gateway key and Gitea token, copied
+#            from the litellm and gitea modules; audit HMAC secret)   root:kent 0640
+#   data     /var/lib/kent/{kent.db, audit/, digests/, inbox/}   kent-owned
+#   timers   system units as kent: poll-learnings (1 min), audit-ingest (5 min), digest 07:00,
 #            qa-audit 02:00, audit-anchor 04:30
-#   hermes   profile "kent": SOUL.md, crew-designer skill, gateway wiring
-#            (prior SOUL.md and config.yaml moved aside, restored on uninstall)
-# Requires: litellm (keys in ~/.config/kent) and gitea (kent token) modules.
+# Also enrols the invoking human into kent-operators (single-operator setup).
+# Requires: litellm, gitea and hermes modules.
 # Usage: sudo ./install.sh [--dry-run]
 # =============================================================================
 set -euo pipefail
@@ -22,127 +25,119 @@ source "$HERE/../lib-service.sh"
 while [[ $# -gt 0 ]]; do case "$1" in --dry-run) DRY_RUN=1; shift ;; *) die "unknown option: $1" ;; esac; done
 export DRY_RUN; require_root
 audit_event "install started"
-OP="$(operator_user)"; OH="$(getent passwd "$OP" | cut -d: -f6)"; OG="$(id -gn "$OP")"
-CFG="$OH/.config/kent"; DATA="$OH/.local/share/kent"; BIN="$OH/.local/bin"; UNITS="$OH/.config/systemd/user"
-PROFILE="$OH/.hermes/profiles/kent"; OPT=/opt/kent-core
+OP="$(operator_user)"
+OPT=/opt/kent-core; ETC=/etc/kent/kent; CRED=$ETC/credentials; DATA=/var/lib/kent
+UNITS=(kent-audit-anchor kent-audit-ingest kent-digest kent-poll-learnings kent-qa-audit)
 
 log "preflight"
-command -v hermes >/dev/null 2>&1 || runuser -u "$OP" -- bash -lc 'command -v hermes' >/dev/null || die "Hermes not found for $OP (prerequisite)"
-[[ -d "$PROFILE" ]] || die "Hermes profile 'kent' missing: run as $OP: hermes profile create kent --no-skills"
-[[ -s "$CFG/litellm_kent_key" ]] || die "LiteLLM kent key missing: install the litellm module first"
-[[ -s "$CFG/gitea_kent_token" ]] || die "Gitea kent token missing: install the gitea module first"
-[[ "$(loginctl show-user "$OP" -p Linger --value 2>/dev/null)" == "yes" ]] \
-    || warn "linger is off for $OP: Kent's timers only run while $OP is logged in"
+getent passwd kent >/dev/null || die "hermes module not installed (kent account missing)"
+getent group kent-operators >/dev/null || die "hermes module not installed (kent-operators group missing)"
+[[ -s /etc/kent/litellm/credentials/kent_key ]] || die "litellm module not installed (Kent's gateway key missing)"
+[[ -s /etc/kent/gitea/credentials/kent_token ]] || die "gitea module not installed (Kent's Gitea token missing)"
 
-# --- Tools (root-owned) -------------------------------------------------------
+# --- Tools and entry points (root-owned) ----------------------------------------------------
 claim_path path "$OPT"
+ensure_dir "$OPT" 0755 root root
 ensure_dir "$OPT/bin" 0755 root root
-for f in "$HERE"/bin/*.py; do run install -m 0755 -o root -g root "$f" "$OPT/bin/"; done
+ensure_dir "$OPT/libexec" 0755 root root
+for f in "$HERE"/bin/*.py "$HERE/bin/kent"; do run install -m 0755 -o root -g root "$f" "$OPT/bin/"; done
+run install -m 0755 -o root -g root "$HERE/libexec/kent-exec" "$OPT/libexec/kent-exec"
 for f in "$KENT_ROOT/schemas/kent.sql" "$KENT_ROOT/schemas/stack.sql"; do run install -m 0644 -o root -g root "$f" "$OPT/"; done
+# Command names Kent itself uses (its SOUL and skills refer to these; its PATH has $OPT/bin).
+for t in gent:kent_gent audit:kent_audit digest:kent_digest poll-learnings:kent_poll_learnings qa-audit:kent_qa_audit; do
+    run ln -sfn "${t#*:}.py" "$OPT/bin/kent-${t%%:*}"
+done
+if [[ -L /usr/local/bin/kent || ! -e /usr/local/bin/kent ]]; then
+    claim_path file /usr/local/bin/kent
+    run ln -sfn "$OPT/bin/kent" /usr/local/bin/kent
+else
+    die "/usr/local/bin/kent exists and is not Kent's symlink"
+fi
 
-# --- Operator config + secrets ------------------------------------------------
-ensure_dir "$CFG" 0700 "$OP" "$OG" "$OP"
-TMP="$(mktemp)"; cat > "$TMP" <<CONF
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+cat > "$WORK/sudoers" <<EOF
+# Kent: members of kent-operators may run Kent's entry point as the kent account, and nothing
+# else. kent-exec validates its arguments and records the calling human in the audit chain.
+# Installed by install/services/kent-core/install.sh; removed by its uninstall.
+%kent-operators ALL=(kent) NOPASSWD: $OPT/libexec/kent-exec
+EOF
+visudo -cf "$WORK/sudoers" >/dev/null || die "sudoers syntax check failed"
+place_file file "$WORK/sudoers" /etc/sudoers.d/92-kent-operators 0440 root root
+
+# --- Configuration and credentials (root-owned, readable by kent) ---------------------------
+claim_path path "$ETC"
+ensure_dir "$ETC" 0750 root kent
+ensure_dir "$CRED" 0750 root kent
+cat > "$WORK/kent.conf" <<CONF
 # Kent configuration — written by install/services/kent-core/install.sh
 KENT_DATA=$DATA
 KENT_DB=$DATA/kent.db
 AUDIT_LOG=$DATA/audit/hmac_chain.log
-AUDIT_SECRET=$CFG/audit_hmac_secret
+AUDIT_SECRET=$CRED/audit_hmac_secret
 STACKS_DIR=/var/lib/kent-gent/stacks
 GENT_ARCHIVE_DIR=/var/lib/kent-gent/archive
 GENT_BIN=/opt/kent-gent/bin
 LOKI_URL=http://127.0.0.1:3100
 PROM_URL=http://127.0.0.1:9090
 GATEWAY_URL=http://127.0.0.1:4000/v1
-GATEWAY_KEY_FILE=$CFG/litellm_kent_key
+GATEWAY_KEY_FILE=$CRED/litellm_kent_key
 GITEA_URL=http://127.0.0.1:3000
-GITEA_TOKEN_FILE=$CFG/gitea_kent_token
+GITEA_TOKEN_FILE=$CRED/gitea_kent_token
 TEMPLATE_REPO=kent/stack-template
 CONF
-place_file file "$TMP" "$CFG/kent.conf" 0600 "$OP" "$OG"; rm -f "$TMP"
-if [[ ! -s "$CFG/audit_hmac_secret" ]]; then
-    claim_path file "$CFG/audit_hmac_secret"
-    [[ "$DRY_RUN" -eq 1 ]] || { (umask 077; openssl rand -hex 32 > "$CFG/audit_hmac_secret"); chown "$OP:$OG" "$CFG/audit_hmac_secret"; }
+place_file file "$WORK/kent.conf" "$ETC/kent.conf" 0640 root kent
+place_file file /etc/kent/litellm/credentials/kent_key "$CRED/litellm_kent_key" 0640 root kent
+place_file file /etc/kent/gitea/credentials/kent_token "$CRED/gitea_kent_token" 0640 root kent
+if [[ ! -s "$CRED/audit_hmac_secret" ]]; then
+    [[ "$DRY_RUN" -eq 1 ]] || (umask 077; openssl rand -hex 32 > "$WORK/secret")
+    place_file file "$WORK/secret" "$CRED/audit_hmac_secret" 0640 root kent
 fi
 
-# --- Data (state: removed only with --purge-state) ------------------------------
-ensure_dir "$DATA" 0700 "$OP" "$OG" "$OP"
-for d in audit digests; do run install -d -m 0700 -o "$OP" -g "$OG" "$DATA/$d"; done
-manifest_add state "$DATA/kent.db"; manifest_add state "$DATA/audit"; manifest_add state "$DATA/digests"
-[[ "$DRY_RUN" -eq 1 ]] || runuser -u "$OP" -- sqlite3 "$DATA/kent.db" < "$KENT_ROOT/schemas/kent.sql"
-[[ "$DRY_RUN" -eq 1 ]] || chmod 0600 "$DATA/kent.db"
-
-# --- Launchers -----------------------------------------------------------------
-ensure_dir "$BIN" 0755 "$OP" "$OG" "$OP"
-launcher() {  # launcher <name> <command...>
-    local t; t="$(mktemp)"
-    printf '#!/bin/sh\n# Kent launcher (installed by kent-core; do not edit)\nexec %s "$@"\n' "$2" > "$t"
-    place_file file "$t" "$BIN/$1" 0755 "$OP" "$OG"; rm -f "$t"
-}
-launcher kent "hermes -p kent"
-launcher kent-audit "/usr/bin/python3 $OPT/bin/kent_audit.py"
-launcher kent-digest "/usr/bin/python3 $OPT/bin/kent_digest.py"
-launcher kent-poll-learnings "/usr/bin/python3 $OPT/bin/kent_poll_learnings.py"
-launcher kent-qa-audit "/usr/bin/python3 $OPT/bin/kent_qa_audit.py"
-launcher kent-gent "/usr/bin/python3 $OPT/bin/kent_gent.py"
-
-# --- Hermes profile --------------------------------------------------------------
-move_aside "$PROFILE/SOUL.md"
-place_file file "$KENT_ROOT/templates/app/SOUL.md" "$PROFILE/SOUL.md" 0644 "$OP" "$OG"
-claim_path path "$PROFILE/skills/kent"
-ensure_dir "$PROFILE/skills/kent" 0755 "$OP" "$OG" "$OP"
-run cp -r "$KENT_ROOT/skills/kent/crew-designer" "$PROFILE/skills/kent/"
-run chown -R "$OP:$OG" "$PROFILE/skills/kent"
-# Gateway wiring: keep the prior config for uninstall, then configure in place.
-if ! grep -q "^moved $PROFILE/config.yaml " "$(manifest_file)" 2>/dev/null; then
-    move_aside "$PROFILE/config.yaml"
-    bak="$(awk -v o="$PROFILE/config.yaml" '$1=="moved" && $2==o {print $3}' "$(manifest_file)" 2>/dev/null)"
-    [[ "$DRY_RUN" -eq 1 ]] || cp -p "$bak" "$PROFILE/config.yaml"
-fi
-[[ "$DRY_RUN" -eq 1 ]] || runuser -u "$OP" -- env HOME="$OH" PATH="$OH/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-    "$KENT_ROOT/install/services/litellm/configure-hermes.sh" >/dev/null
-[[ "$DRY_RUN" -eq 1 ]] || find "$PROFILE" -maxdepth 1 -name 'config.yaml.bak-*' -newer "$OPT/bin/kentlib.py" -delete
-
-# --- User timers -------------------------------------------------------------------
-ensure_dir "$UNITS" 0755 "$OP" "$OG" "$OP"
-for f in "$HERE"/systemd-user/*; do
-    dest="$UNITS/$(basename "$f")"
-    if [[ -e "$dest" ]] && ! manifest_has userunit "$OP $dest"; then die "$dest exists and was not created by Kent"; fi
-    manifest_add userunit "$OP $dest"
-    run install -m 0644 -o "$OP" -g "$OG" "$f" "$dest"
-done
-run systemctl --user -M "${OP}@" daemon-reload
-# enable, then restart: an already-active timer keeps its old schedule until restarted.
-for t in "$HERE"/systemd-user/*.timer; do
-    run systemctl --user -M "${OP}@" enable "$(basename "$t")"
-    run systemctl --user -M "${OP}@" restart "$(basename "$t")"
-done
-
-# --- Verify ------------------------------------------------------------------------
+# --- Data (kept on uninstall unless --purge-state) ----------------------------------------------
+ensure_dir "$DATA" 0750 kent kent
+for d in audit:0700 digests:0750 inbox:0700; do ensure_dir "$DATA/${d%%:*}" "${d##*:}" kent kent; done
+for s in kent.db audit digests inbox; do manifest_add state "$DATA/$s"; done
 if [[ "$DRY_RUN" -eq 0 ]]; then
-    RU() { runuser -u "$OP" -- env HOME="$OH" KENT_CONF="$CFG/kent.conf" "$@"; }
+    runuser -u kent -- sqlite3 "$DATA/kent.db" < "$KENT_ROOT/schemas/kent.sql"
+    chmod 0600 "$DATA/kent.db"
+fi
+
+# --- Schedules (system units, run as kent) ---------------------------------------------------------
+for u in "${UNITS[@]}"; do
+    for ext in service timer; do place_file unit "$HERE/systemd/$u.$ext" "/etc/systemd/system/$u.$ext" 0644 root root; done
+done
+run systemctl daemon-reload
+# enable, then restart: an already-active timer keeps its old schedule until restarted.
+for u in "${UNITS[@]}"; do run systemctl enable "$u.timer"; run systemctl restart "$u.timer"; done
+
+# --- Operator (single-operator setup: the human who ran the installer) ----------------------------
+if ! id -nG "$OP" | tr ' ' '\n' | grep -qx kent-operators; then
+    run usermod -aG kent-operators "$OP"
+    manifest_add member "kent-operators $OP"
+    log "added $OP to kent-operators (takes effect at next login, or: newgrp kent-operators)"
+fi
+
+# --- Verify ------------------------------------------------------------------------------------------
+if [[ "$DRY_RUN" -eq 0 ]]; then
+    RU() { runuser -u kent -- env KENT_CONF="$ETC/kent.conf" HOME="$DATA" "$@"; }
     RU /usr/bin/python3 "$OPT/bin/kent_audit.py" append kent-core install "kent-core installed" \
         || die "audit chain append failed"
-    # Verify and anchor right away (on every install), so the chain is protected from
-    # day one rather than only after the first scheduled 04:30 anchor.
     RU /usr/bin/python3 "$OPT/bin/kent_audit.py" anchor >/dev/null || die "audit chain does not verify"
     RU /usr/bin/python3 "$OPT/bin/kent_audit_ingest.py" >/dev/null || die "audit ingest failed"
     RU /usr/bin/python3 "$OPT/bin/kent_digest.py" >/dev/null || die "digest failed"
-    # Count timers that are armed: a next run scheduled, or their job running right now
-    # (a dormant timer shows "-" with an idle service). Retried briefly for running jobs.
     armed() {
-        local c=0 t
-        for t in "$HERE"/systemd-user/*.timer; do
-            t="$(basename "$t" .timer)"
-            if [[ "$(systemctl --user -M "${OP}@" show "$t.timer" -p NextElapseUSecRealtime --value 2>/dev/null)" =~ [0-9] ]] \
-               || systemctl --user -M "${OP}@" is-active --quiet "$t.service" 2>/dev/null; then c=$((c + 1)); fi
+        local c=0 u
+        for u in "${UNITS[@]}"; do
+            if [[ "$(systemctl show "$u.timer" -p NextElapseUSecRealtime --value 2>/dev/null)" =~ [0-9] ]] \
+               || systemctl is-active --quiet "$u.service"; then c=$((c + 1)); fi
         done
         echo "$c"
     }
     for _ in $(seq 1 30); do n="$(armed)"; [[ "$n" -eq 5 ]] && break; sleep 2; done
-    [[ "$n" -ge 5 ]] || die "expected 5 kent timers, found $n"
-    grep -q "Estate Manager" "$PROFILE/SOUL.md" || die "Kent SOUL.md not in place"
-    log "OK: kent-core installed; audit chain valid; digest written; $n timers active"
+    [[ "$n" -ge 5 ]] || die "expected 5 armed kent timers, found $n"
+    # As the operator (a fresh login session picks up the new group membership):
+    runuser -u "$OP" -- /usr/local/bin/kent status >/dev/null || die "'kent status' failed for $OP"
+    log "OK: kent-core installed; audit chain valid; digest written; $n timers armed; 'kent' works for $OP"
 fi
 audit_event "install completed"
 log "done."

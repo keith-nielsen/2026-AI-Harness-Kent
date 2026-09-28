@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Kent — kent-admin (run from a checkout of the repository)
+#
+#   sudo ./kent-admin status                  profile, gateway config, Anthropic key, services
+#   sudo ./kent-admin profile lab|hardened    switch Kent's Hermes policy (re-renders its managed
+#                                             config; takes effect at Kent's next start)
+#   sudo ./kent-admin config dev|prod         gateway routing: dev = every tier on the local model;
+#                                             prod = smart/frontier on Claude (needs the key)
+#   sudo ./kent-admin set-anthropic-key       store the Anthropic key for the gateway (prompted,
+#                                             hidden; kept in /etc/kent/litellm/credentials, root 0600)
+#   sudo ./kent-admin conformance             run the conformance suite
+#
+# Every change goes through the module installers, so it is recorded in their manifests and
+# the journal (tag kent-install) and reversed by ./uninstall.sh. Day-to-day use of Kent needs
+# none of this: members of kent-operators just run `kent`.
+# =============================================================================
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+SVC="$ROOT/install/services"
+usage() { sed -n '2,/^# =====/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+[[ $# -ge 1 ]] || { usage; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "run with sudo: sudo ./kent-admin $*" >&2; exit 1; }
+[[ -f /var/lib/kent-install/manifest/hermes ]] || { echo "Kent is not installed (run sudo ./install.sh)" >&2; exit 1; }
+
+current_config() {
+    case "$(head -1 /etc/kent/litellm/config.yaml 2>/dev/null)" in
+        *litellm_config.yaml*) echo prod ;; *litellm_config.sim.yaml*) echo sim ;;
+        *litellm_config.sim-routed.yaml*) echo sim-routed ;; *) echo dev ;;
+    esac
+}
+key_set() { [[ -s /etc/kent/litellm/credentials/anthropic_api_key ]]; }
+
+cmd="$1"; shift
+case "$cmd" in
+    status)
+        echo "profile        $(cat /etc/kent/profile 2>/dev/null || echo '?')"
+        echo "gateway        $(current_config)"
+        echo "anthropic key  $(key_set && echo set || echo 'not set')"
+        echo "operators      $(getent group kent-operators | cut -d: -f4 | tr ',' ' ')"
+        echo "services:"
+        for u in kent-litellm kent-prometheus kent-node-exporter kent-loki alloy grafana-server kent-gitea \
+                 kent-searxng kent-squid kent-gent-egress.socket kent-gent-gateway.socket kent-gent-search.socket; do
+            printf '  %-26s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
+        done
+        echo "timers:"
+        for t in kent-poll-learnings kent-audit-ingest kent-digest kent-qa-audit kent-audit-anchor; do
+            printf '  %-26s next %s\n' "$t" "$(systemctl show "$t.timer" -p NextElapseUSecRealtime --value 2>/dev/null || echo '?')"
+        done
+        ;;
+    profile)
+        p="${1:-}"; [[ "$p" == lab || "$p" == hardened ]] || { echo "usage: kent-admin profile lab|hardened" >&2; exit 2; }
+        "$SVC/hermes/install.sh" --profile "$p"
+        echo "Profile is now $p. A running 'kent' session keeps its old policy until restarted."
+        ;;
+    config)
+        c="${1:-}"; [[ "$c" == dev || "$c" == prod ]] || { echo "usage: kent-admin config dev|prod" >&2; exit 2; }
+        if [[ "$c" == prod ]] && ! key_set; then
+            echo "prod routes smart/frontier to Claude; set the key first: sudo ./kent-admin set-anthropic-key" >&2; exit 1
+        fi
+        "$SVC/litellm/install.sh" --config "$c"
+        ;;
+    set-anthropic-key)
+        "$SVC/litellm/install.sh" --set-anthropic-key
+        [[ "$(current_config)" == prod ]] || echo "The gateway is on dev; to route smart/frontier to Claude: sudo ./kent-admin config prod"
+        ;;
+    conformance)
+        exec python3 "$ROOT/tests/conformance/conformance.py" "$@"
+        ;;
+    -h|--help|help) usage ;;
+    *) echo "unknown command: $cmd" >&2; usage >&2; exit 2 ;;
+esac

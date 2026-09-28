@@ -8,7 +8,7 @@ server:
   http_listen_port: 3100
   grpc_listen_address: 127.0.0.1
   grpc_listen_port: 9095
-  log_level: info
+  log_level: warn   # info logs ~1.5k housekeeping lines/h into Loki itself
 
 common:
   instance_addr: 127.0.0.1

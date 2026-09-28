@@ -44,9 +44,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(kl, "audit", lambda *a: calls["audit"].append(a))
     calls["issues"], calls["docker"] = [], []
     monkeypatch.setattr(kl, "gitea_issue", lambda c, repo, title, body: calls["issues"].append((repo, title, body)) or 7)
-    real_run = poller.subprocess.run
-    monkeypatch.setattr(poller.subprocess, "run", lambda cmd, **k: calls["docker"].append(cmd)
-                        if cmd[0] == "docker" else real_run(cmd, **k))
+    # Container control goes through the root-owned broker (kentlib.gent_ctl), never docker.
+    monkeypatch.setattr(kl, "gent_ctl", lambda c, action, sid, *extra: calls["docker"].append([action, sid]))
 
     def add(category, summary, detail="d"):
         con = sqlite3.connect(sdb)
@@ -165,7 +164,7 @@ def test_breaker_trips_on_failed_task(env):
     poller, calls, _, add, stacks, kdb = env
     set_kanban(stacks, [("t01", "done"), ("t02", "failed")])
     poller.main()
-    assert ["docker", "stop", "-t", "30", "kent-gent-aaaaaaaa"] in calls["docker"]
+    assert ["stop", "aaaaaaaa"] in calls["docker"]
     assert registry_status(kdb) == "paused"
     repo, title, body = calls["issues"][0]
     assert repo == "kent/gent-aaaaaaaa" and "Circuit breaker" in title and "t02 failed" in body

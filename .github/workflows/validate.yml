@@ -20,7 +20,7 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck -S warning -e SC2034 \
-            install/services/*.sh install/services/*/*.sh \
+            install.sh uninstall.sh kent-admin install/services/*.sh install/services/*/*.sh \
             install/services/litellm/kent-litellm-start \
             install/dev/*.sh tests/gent/*.sh
 
@@ -42,7 +42,7 @@ jobs:
                       yaml.safe_load(p.read_text())
                   elif p.suffix == ".json":
                       json.loads(p.read_text())
-                  elif p.suffix == ".py" or p.name in ("kent-spawn-gent", "kent-destroy-gent"):
+                  elif p.suffix == ".py" or p.name in ("kent-spawn-gent", "kent-destroy-gent", "kent-gent-ctl", "kent-exec", "kent"):
                       py_compile.compile(str(p), doraise=True)
               except Exception as e:  # noqa: BLE001
                   errors.append(f"{p}: {e}")
@@ -54,7 +54,9 @@ jobs:
           grep -q '^FROM python@sha256:' install/services/gent/image/Dockerfile
           grep -c -- '--hash=sha256:' install/services/litellm/requirements.lock
           grep -c -- '--hash=sha256:' install/services/gent/image/requirements.lock
-          for v in PROMETHEUS NODE_EXPORTER LOKI GITEA; do grep -q "^${v}_SHA256=[0-9a-f]\{64\}$" install/services/versions.env; done
+          for v in PROMETHEUS NODE_EXPORTER LOKI GITEA UV HERMES_UVLOCK TIRITH; do grep -q "^${v}_SHA256=[0-9a-f]\{64\}$" install/services/versions.env; done
+          grep -q '^SEARXNG_IMAGE=.*@sha256:[0-9a-f]\{64\}$' install/services/versions.env
+          grep -q '^HERMES_COMMIT=[0-9a-f]\{40\}$' install/services/versions.env
 
   unit-tests:
     runs-on: ubuntu-24.04
@@ -69,4 +71,4 @@ jobs:
           .venv/bin/pip install -q --require-hashes -r install/services/litellm/requirements.lock
           .venv/bin/pip install -q "pytest==8.4.2" "pytest-asyncio==1.2.0"
       - name: Unit tests (gateway, kent-core, Gent CEO, install library)
-        run: .venv/bin/python -m pytest -q tests/gateway tests/kent_core tests/gent tests/install
+        run: .venv/bin/python -m pytest -q tests/gateway tests/kent_core tests/gent tests/install tests/sim

@@ -1,0 +1,303 @@
+{
+ "uid": "kent-routing",
+ "title": "Kent routing",
+ "tags": [
+  "kent"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": false,
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "refresh": "30s",
+ "description": "How the gateway routes: router tier choices, escalation outcomes, fallbacks, latency and tokens.",
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Router decisions over time",
+   "description": "Which tier the complexity router chose for each `auto` request.",
+   "datasource": {
+    "type": "loki",
+    "uid": "kent-loki"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (routed_tier) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | model_group=\"auto\" [$__auto]))",
+     "datasource": {
+      "type": "loki",
+      "uid": "kent-loki"
+     },
+     "legendFormat": "{{routed_tier}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "stacking": {
+       "mode": "normal"
+      },
+      "drawStyle": "bars",
+      "fillOpacity": 80
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 2,
+   "type": "barchart",
+   "title": "Escalation outcomes (whole range)",
+   "description": "Did the chosen tier answer (success) or fail and fall back to fast (failure)?",
+   "datasource": {
+    "type": "loki",
+    "uid": "kent-loki"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (routed_tier, status) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | model_group=\"auto\" [$__range]))",
+     "datasource": {
+      "type": "loki",
+      "uid": "kent-loki"
+     },
+     "legendFormat": "{{routed_tier}} {{status}}",
+     "queryType": "instant",
+     "instant": true,
+     "range": false
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Fallbacks to the local tier",
+   "description": "Each time a smart/frontier call failed and the gateway answered from a fallback model instead.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "kent-prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (fallback_model) (increase(litellm_deployment_successful_fallbacks_total[$__rate_interval]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "kent-prometheus"
+     },
+     "legendFormat": "fell back to {{fallback_model}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "stacking": {
+       "mode": "normal"
+      },
+      "drawStyle": "bars",
+      "fillOpacity": 80
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Failures by error class",
+   "description": "Why calls failed (recorded since the gateway logs error_class).",
+   "datasource": {
+    "type": "loki",
+    "uid": "kent-loki"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (error_class) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | status=\"failure\" [$__auto]))",
+     "datasource": {
+      "type": "loki",
+      "uid": "kent-loki"
+     },
+     "legendFormat": "{{error_class}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "stacking": {
+       "mode": "normal"
+      },
+      "drawStyle": "bars",
+      "fillOpacity": 80
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Latency p95 by model group (s)",
+   "description": "95th percentile call latency; router = classifier cost per request.",
+   "datasource": {
+    "type": "loki",
+    "uid": "kent-loki"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "quantile_over_time(0.95, {unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | __error__=\"\" | unwrap latency_s [$__auto]) by (model_group)",
+     "datasource": {
+      "type": "loki",
+      "uid": "kent-loki"
+     },
+     "legendFormat": "{{model_group}}"
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Prompt tokens by identity",
+   "description": "Input tokens per caller: the cost driver once smart/frontier are a paid model.",
+   "datasource": {
+    "type": "loki",
+    "uid": "kent-loki"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (identity) (sum_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | __error__=\"\" | unwrap prompt_tokens [$__auto]))",
+     "datasource": {
+      "type": "loki",
+      "uid": "kent-loki"
+     },
+     "legendFormat": "{{identity}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "stacking": {
+       "mode": "normal"
+      },
+      "drawStyle": "bars",
+      "fillOpacity": 80
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Where calls went (backend)",
+   "description": ":8080 = local llama.cpp, :4010 = oracle fixture (sim), api.anthropic.com = Claude.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "kent-prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 24,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (api_base) (increase(litellm_deployment_total_requests_total{api_base!=\"\"}[$__rate_interval]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "kent-prometheus"
+     },
+     "legendFormat": "{{api_base}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "stacking": {
+       "mode": "normal"
+      },
+      "drawStyle": "bars",
+      "fillOpacity": 80
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 8,
+   "type": "logs",
+   "title": "Recent failed calls",
+   "description": "Latest failures with their reason.",
+   "datasource": {
+    "type": "loki",
+    "uid": "kent-loki"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 24,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "{unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | status=\"failure\" | line_format \"{{.identity}} {{.model_group}}→{{.routed_tier}} {{.error_class}} {{.error}}\"",
+     "datasource": {
+      "type": "loki",
+      "uid": "kent-loki"
+     },
+     "legendFormat": ""
+    }
+   ],
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "sortOrder": "Descending"
+   }
+  }
+ ]
+}
