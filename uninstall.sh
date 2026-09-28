@@ -11,8 +11,9 @@
 #
 #   --log FILE   also write every module's full output to FILE (owned by the invoking user), with
 #                a header (repository commit, host, time) and each module's exit status
-#   --trace      trace every command of this script and of each module (timestamp, script, line);
-#                use with --log
+#   --trace      also trace every command of this script and of each module (timestamp, script,
+#                line) into FILE.trace, kept apart so FILE holds exactly what the scripts printed;
+#                needs --log
 # =============================================================================
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -27,7 +28,8 @@ while [[ $# -gt 0 ]]; do
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
-[[ $EUID -eq 0 ]] || { echo "run with sudo: sudo ./uninstall.sh $*" >&2; exit 1; }
+[[ "$TRACE" -eq 0 || -n "$LOG" ]] || { echo "--trace needs --log FILE" >&2; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "run with sudo: sudo ./uninstall.sh (see --help)" >&2; exit 1; }
 MODULES=(gent kent-core hermes searxng gitea grafana alloy loki node_exporter prometheus litellm llama)
 op="${SUDO_USER:-}"
 
@@ -35,9 +37,11 @@ op="${SUDO_USER:-}"
 if [[ -n "$LOG" ]]; then
     LOG="$(realpath -m "$LOG")"
     case "$LOG" in /var/lib/kent*|/etc/kent*|/opt/kent*|/srv/kent*) echo "--log must not be inside a Kent path" >&2; exit 2 ;; esac
-    : > "$LOG"
-    [[ -n "$op" && "$op" != root ]] && chown "$op:" "$LOG"
-    chmod 0600 "$LOG"
+    files=("$LOG"); [[ "$TRACE" -eq 1 ]] && files+=("$LOG.trace")
+    for f in "${files[@]}"; do
+        : > "$f"; chmod 0600 "$f"
+        [[ -n "$op" && "$op" != root ]] && chown "$op:" "$f"
+    done
 fi
 logf() { [[ -z "$LOG" ]] || printf '%s\n' "$@" >> "$LOG"; }
 git_() { git -c safe.directory="$ROOT" -C "$ROOT" "$@" 2>/dev/null; }
@@ -46,13 +50,14 @@ logf "# Kent uninstall — $(date -Is)" \
      "# repo $ROOT  commit $(git_ rev-parse HEAD || echo '?') $(git_ describe --tags --always || true)  $( [[ -z "$(git_ status --porcelain)" ]] && echo clean || echo "DIRTY ($(git_ status --porcelain | wc -l) files)")" \
      "# manifests: $(ls /var/lib/kent-install/manifest 2>/dev/null | tr '\n' ' ')"
 
-# --- Trace: bash imports SHELLOPTS and PS4 from the environment, so each module script (a new
-# bash process) traces too. Each line: time, script:line.
+# --- Trace: bash imports SHELLOPTS, PS4 and BASH_XTRACEFD from the environment and module
+# scripts inherit the open descriptor, so every script traces into FILE.trace (time, script:line)
+# without mixing into its output.
 if [[ "$TRACE" -eq 1 ]]; then
+    exec {xfd}>>"$LOG.trace"
+    export BASH_XTRACEFD=$xfd
     export PS4='+ $(date +%H:%M:%S.%3N) ${BASH_SOURCE[0]##*/}:${LINENO}: '
     export SHELLOPTS
-    # This script's own trace goes to the log (modules' traces arrive with their output).
-    if [[ -n "$LOG" ]]; then exec {xfd}>>"$LOG"; BASH_XTRACEFD=$xfd; fi
     set -x
 fi
 
@@ -68,11 +73,10 @@ for mod in "${MODULES[@]}"; do
     if "$ROOT/install/services/$mod/uninstall.sh" "${ARGS[@]}" >"$out" 2>&1; then st=0; else st=$?; fi
     [[ -z "$LOG" ]] || cat "$out" >> "$LOG"
     logf "=== $mod: exit $st $(date +%H:%M:%S)"
-    # Summary: the module's last own line (trace lines start with '+').
     if [[ "$st" -eq 0 ]]; then
-        echo "✓ $(grep -v '^+' "$out" | tail -1 | sed 's/^\[[0-9:]*\] [a-z_-]*: //')"
+        echo "✓ $(tail -1 "$out" | sed 's/^\[[0-9:]*\] [a-z_-]*: //')"
     else
-        echo "✗ (exit $st)"; grep -v '^+' "$out" | tail -10 | sed 's/^/      /'; rc=1
+        echo "✗ (exit $st)"; tail -10 "$out" | sed 's/^/      /'; rc=1
     fi
     rm -f "$out"
 done
@@ -100,5 +104,5 @@ if [[ -n "$op" && -d "$(getent passwd "$op" | cut -d: -f6)/.config/kent" ]]; the
     echo ""
     echo "Your personal Kent credentials remain in ~$op/.config/kent (delete them when no longer needed)."
 fi
-[[ -z "$LOG" ]] || echo "Full log: $LOG"
+[[ -z "$LOG" ]] || echo "Full log: $LOG$( [[ "$TRACE" -eq 1 ]] && echo " (trace: $LOG.trace)")"
 exit "$rc"
