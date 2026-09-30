@@ -72,6 +72,8 @@ def cmd_status() -> int:
     tool("kent_gent.py", "list")
     digests = sorted((Path(c["KENT_DATA"]) / "digests").glob("*.md"))
     print(f"digest:   {digests[-1].name if digests else 'none yet'}")
+    unread = len(kentlib.unread_notices(kentlib.kent_db(c), principal(), mark=False, limit=100))
+    print(f"notices:  {unread} unread" + (" (kent notices)" if unread else ""))
     return 0
 
 
@@ -149,6 +151,26 @@ def cmd_gent(args: list[str]) -> int:
     return tool("kent_gent.py", action, sid, *rest)
 
 
+def cmd_notices(args: list[str]) -> int:
+    """What Kent has to tell this operator about Gents (finished, failed, halted, stuck).
+    Unread notices are marked read as they are shown; --all shows the last 20 again."""
+    if any(a not in ("--all", "--quiet") for a in args):
+        die("usage: notices [--all] [--quiet]", 2)
+    kdb = kentlib.kent_db(kentlib.conf())
+    if "--all" in args:
+        rows = kdb.execute("SELECT * FROM (SELECT * FROM notices ORDER BY id DESC LIMIT 20) ORDER BY id").fetchall()
+    else:
+        rows = kentlib.unread_notices(kdb, principal())
+    if not rows:
+        if "--quiet" not in args:
+            print("No new notices.")
+        return 0
+    print(f"Notices from Kent ({len(rows)}):")
+    for r in rows:
+        print(f"  [{r['created_at']} UTC] " + r["text"].replace("\n", "\n    "))
+    return 0
+
+
 def cmd_digest() -> int:
     digests = sorted((Path(kentlib.conf()["KENT_DATA"]) / "digests").glob("*.md"))
     if not digests:
@@ -176,6 +198,8 @@ def main(argv: list[str]) -> int:
         return cmd_new(args)
     if cmd == "export":
         return cmd_export(args)
+    if cmd == "notices":
+        return cmd_notices(args)
     if cmd == "gent":
         return cmd_gent(args)
     die(f"unknown command {cmd!r}", 2)

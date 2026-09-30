@@ -17,6 +17,7 @@ import json
 import os
 import pwd
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -123,9 +124,30 @@ def check_hardening() -> None:
         rec("INFO", "§19 hardening", f"{t}.service exposure", m.group(1) if m else "?")
 
 
+def pins(path: Path = Path(__file__).resolve().parents[2] / "install/services/versions.env") -> dict[str, str]:
+    """KEY=value lines of versions.env (the pinned, tested versions)."""
+    return dict(line.split("=", 1) for line in path.read_text().splitlines()
+                if re.match(r"^[A-Z0-9_]+=", line))
+
+
 def check_manifests() -> None:
     for m in MODULES:
         ok(Path(f"/var/lib/kent-install/manifest/{m}").is_file(), "install record", f"manifest for {m}")
+    # Vendor packages Kent installs run at the pinned, tested version; an adopted (pre-existing)
+    # package is the operator's and only reported.
+    v = pins()
+    for pkg, key in (("grafana", "GRAFANA_VERSION"), ("alloy", "ALLOY_VERSION")):
+        have = sh("dpkg-query", "-W", "-f=${Version}", pkg)
+        mf = Path(f"/var/lib/kent-install/manifest/{pkg}")
+        if mf.is_file() and f"package {pkg}" in mf.read_text().splitlines():
+            ok(have == v[key], "install record", f"{pkg} at the pinned version", f"installed {have or 'none'}, "
+               f"pinned {v[key]}")
+        else:
+            rec("INFO", "install record", f"{pkg} package pre-existing (adopted, not pinned)", have or "not installed")
+    added = [m for m in ("alloy", "grafana") if Path(f"/var/lib/kent-install/manifest/{m}").is_file()
+             and "file /etc/apt/sources.list.d/grafana.list" in Path(f"/var/lib/kent-install/manifest/{m}").read_text()]
+    ok(not added, "install record", "no apt source added by Kent (packages come from pinned files)",
+       f"grafana.list recorded by {', '.join(added)}; re-run the module to retire it" if added else "")
 
 
 def check_gateway() -> None:
@@ -156,6 +178,11 @@ def check_observability() -> None:
     targets = {t["labels"]["job"]: t["health"] for t in json.loads(body)["data"]["activeTargets"]} if code == 200 else {}
     for job in ("prometheus", "node", "litellm", "loki", "alloy", "grafana", "gitea"):
         ok(targets.get(job) == "up", "§17 observability", f"Prometheus target {job} up", targets.get(job, "missing"))
+    if shutil.which("nvidia-smi"):
+        code, body = http("http://127.0.0.1:9090/api/v1/query?" + urllib.parse.urlencode({"query": "kent_gpu_up"}))
+        res = json.loads(body)["data"]["result"] if code == 200 else []
+        ok(bool(res) and res[0]["value"][1] == "1", "§17 observability", "GPU metrics reach Prometheus (kent-gpu-metrics, 15 s)",
+           res[0]["value"][1] if res else "no kent_gpu_up series")
     q = 'sum(count_over_time({unit="kent-litellm.service", kent_event="llm_call"}[24h]))'
     code, body = http("http://127.0.0.1:3100/loki/api/v1/query?" + urllib.parse.urlencode({"query": q}))
     n = int(float(json.loads(body)["data"]["result"][0]["value"][1])) if code == 200 and json.loads(body)["data"]["result"] else 0
@@ -305,6 +332,23 @@ def check_gents() -> None:
         except KeyError:
             pass
     ok(not leftovers, "§14 accounts", "retired Gent accounts removed", ",".join(leftovers))
+    # Each live Gent must be able to read Kent's answers: inbox setgid to its group, files in it too.
+    unreadable = []
+    for sid, user in db.execute("SELECT stack_id, unix_user FROM stack_registry WHERE status NOT IN ('archived','destroyed')"):
+        inbox = Path("/var/lib/kent-gent/stacks") / sid / "inbox"
+        try:
+            gid = grp.getgrnam(user).gr_gid
+        except KeyError:
+            continue
+        if not inbox.is_dir():
+            continue
+        ist = inbox.stat()
+        if ist.st_gid != gid or not ist.st_mode & 0o2000:
+            unreadable.append(f"{sid}:inbox")
+        unreadable += [f"{sid}:{f.name}" for f in inbox.iterdir()
+                       if f.is_file() and (f.stat().st_gid != gid or not f.stat().st_mode & 0o040)]
+    ok(not unreadable, "§8.1 escalation", "Gents can read Kent's answers (inbox setgid, files group-readable)",
+       ",".join(unreadable)[:160])
     adopted = db.execute("SELECT COUNT(*) FROM learning_reviews WHERE verdict='adopt' AND notes LIKE '%template commit%'").fetchone()[0]
     rec("PASS" if adopted else "INFO", "§10 knowledge", "learnings adopted into the template", str(adopted))
     assessed = db.execute("SELECT COUNT(*) FROM gent_assessments").fetchone()[0]
@@ -392,9 +436,36 @@ def check_llama() -> None:
         ok(not unreadable, "§12 security", "every GGUF readable by kent-llama", ",".join(unreadable)[:120])
     sums = Path("/etc/kent/llama/models.sha256")
     listed = {l.split(None, 1)[1].strip() for l in sums.read_text().splitlines() if l.strip()} if sums.exists() else set()
-    gguf = {f.name for f in files if f.suffix == ".gguf"}
-    ok(sums.exists() and sums.stat().st_uid == 0 and gguf <= listed, "§12 security",
-       "every GGUF has a root-owned SHA-256 record (checked at each start)", ",".join(sorted(gguf - listed))[:120])
+    conf = Path("/etc/kent/llama")
+    cst = conf.stat() if conf.exists() else None
+    ok(cst is not None and cst.st_uid == 0 and cst.st_mode & 0o777 == 0o751, "§12 security",
+       "/etc/kent/llama 0751 (operators read the records by name, cannot list)", oct(cst.st_mode & 0o777) if cst else "missing")
+    envst = (conf / "llama.env").stat() if (conf / "llama.env").exists() else None
+    ok(envst is not None and envst.st_mode & 0o777 == 0o640, "§12 security", "llama.env 0640 (not world-readable)",
+       oct(envst.st_mode & 0o777) if envst else "missing")
+    srcf = conf / "models.source"
+    src_rec = dict(l.split(" ", 1) for l in srcf.read_text().splitlines() if " " in l) if srcf.exists() else {}
+    ok(srcf.exists() and srcf.stat().st_uid == 0 and src_rec.get("path") == str(d), "§12 security",
+       "models.source records the models directory (filesystem UUID + path) for start diagnostics", src_rec.get("path", "missing"))
+    if src_rec.get("automount") == "1":
+        # lab: works once the operator logs in; hardened needs a system mount (the installer refuses it).
+        if mode == "hardened":
+            ok(False, "§12 security", "models on a system mount (hardened)", src_rec.get("mountpoint", ""))
+        else:
+            rec("INFO", "§12 security", "models on a desktop automount: the model server starts only after login "
+                "(an /etc/fstab entry is more robust)", src_rec.get("mountpoint", ""))
+    r = subprocess.run(["/opt/kent-llama/libexec/kent-llama-source", "diagnose"], capture_output=True, text=True)
+    ok(r.returncode == 0, "§12 security", "models directory is on the recorded filesystem", r.stdout.strip()[:160])
+    # Only the files the settings select are recorded (and checked at each start): Kent loads one set.
+    envf = Path("/etc/kent/llama/llama.env")
+    llama_env = dict(l.split("=", 1) for l in envf.read_text().splitlines()
+                     if "=" in l and not l.lstrip().startswith("#")) if envf.exists() else {}
+    r = subprocess.run(["/opt/kent-llama/libexec/kent-llama-launch", "--files"], capture_output=True, text=True,
+                       env={"PATH": "/usr/bin:/bin", **llama_env})
+    selected = {Path(l).name for l in r.stdout.splitlines() if l.strip()} if r.returncode == 0 else set()
+    ok(sums.exists() and sums.stat().st_uid == 0 and bool(selected) and selected <= listed, "§12 security",
+       "the selected model files have a root-owned SHA-256 record (checked at each start)",
+       ",".join(sorted(selected - listed))[:120] or r.stderr.strip()[:120])
     # The binary is the root-owned copy recorded at install.
     info = Path("/opt/kent-llama/BUILD-INFO")
     changed = []

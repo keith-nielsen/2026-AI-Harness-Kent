@@ -5,6 +5,7 @@
   kent -q "question"            one question, one answer
   kent status                   health of Kent and its services
   kent digest                   today's digest
+  kent notices [--all]          what Kent has to tell you about Gents (finished, failed, halted, stuck)
   kent audit                    verify Kent's audit chain
   kent gents                    list Gents
   kent gent <status|logs|wait|assess|pause|resume|restart|destroy> ID [...]
@@ -29,6 +30,7 @@ from pathlib import Path
 
 EXEC = "/opt/kent-core/libexec/kent-exec"
 LLAMA_UNIT = "kent-llama.service"
+LLAMA_SOURCE = "/opt/kent-llama/libexec/kent-llama-source"
 PROJECT_FILES = ("project.yaml", "agents.yaml", "tasks.yaml")
 MAX_FILE = 256 * 1024
 
@@ -104,6 +106,11 @@ def llama(action: str) -> int:
         print("verifying model hashes and loading the model (about 1-2 minutes)...", flush=True)
     rc = subprocess.run(["systemctl", "--no-ask-password", action, LLAMA_UNIT]).returncode
     if rc != 0:
+        if action != "stop":   # the usual cause is the models drive: name it (moved, missing, not mounted)
+            d = subprocess.run([LLAMA_SOURCE, "diagnose"], capture_output=True, text=True) \
+                if os.access(LLAMA_SOURCE, os.X_OK) else None
+            if d is not None and d.returncode == 1 and d.stdout.strip():
+                print(f"kent: {d.stdout.strip()}", file=sys.stderr)
         die(f"{action} failed; see: journalctl -u {LLAMA_UNIT} -n 50", rc)
     return llama("status") if action != "stop" else 0
 
@@ -113,6 +120,7 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip()); return 0
     check_group()
     if not argv:
+        kexec("notices", "--quiet")   # unread notices first: Kent cannot speak until you do
         os.execvp("sudo", ["sudo", "-n", "-u", "kent", EXEC, "chat"])
     cmd = argv[0]
     if cmd == "-q":
@@ -121,6 +129,8 @@ def main(argv: list[str]) -> int:
         return kexec("ask", stdin=" ".join(argv[1:]).encode())
     if cmd in ("status", "digest", "audit", "gents"):
         return kexec(cmd)
+    if cmd == "notices":
+        return kexec("notices", *argv[1:])
     if cmd == "new":
         if len(argv) < 2:
             die("usage: kent new DIR [--name NAME]", 2)

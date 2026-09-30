@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -144,3 +146,79 @@ def gent_ctl(c: dict, action: str, stack_id: str, *extra: str):
     import subprocess
     return subprocess.run(["sudo", "-n", f"{c.get('GENT_BIN', '/opt/kent-gent/bin')}/kent-gent-ctl",
                            action, stack_id, *extra], capture_output=True, text=True)
+
+
+# --- Stuck Gents -------------------------------------------------------------------------
+# A Gent can stop making progress without failing a task (2026-09-30: its supervisor could not
+# read Kent's answer and logged "Permission denied" every 10 s for 15 minutes; nothing noticed).
+ANSWER_PICKUP_S = 120      # the CEO polls its inbox every 10 s
+CEO_ERROR_S = 300          # the same loop error for this long
+CEO_SILENT_S = 600         # no loop pass while no task is running
+HEARTBEAT_S = 1200         # a running task with no agent step (one local-model call can take 15 min)
+
+
+def _utc(ts: str) -> float:
+    return datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+
+
+def stuck_reasons(sdb: sqlite3.Connection, data: Path, inbox: Path, now: float | None = None) -> list[str]:
+    """Why a Gent is not progressing, in plain language (empty when it is fine or finished).
+    Everything quoted from the Gent (error text) is labelled untrusted."""
+    now = time.time() if now is None else now
+    if (data / "STATE").exists() or (data / "HALTED").exists():
+        return []   # finished, or already halted by the circuit breaker
+    out = []
+    running = sdb.execute("SELECT task_id, heartbeat_at FROM kanban WHERE status='in_progress'").fetchall()
+    for t in sdb.execute("SELECT task_id, error_text FROM kanban WHERE status='blocked'"):
+        m = re.search(r"awaiting escalation #(\d+)", t["error_text"] or "")
+        f = inbox / f"escalation-{m.group(1)}.json" if m else None
+        if f is not None and f.exists() and now - f.stat().st_mtime > ANSWER_PICKUP_S:
+            out.append(f"task {t['task_id']}: Kent's answer (escalation #{m.group(1)}) was delivered "
+                       f"{int((now - f.stat().st_mtime) // 60)} min ago but not picked up")
+    for t in running:
+        if t["heartbeat_at"] and now - _utc(t["heartbeat_at"]) > HEARTBEAT_S:
+            out.append(f"task {t['task_id']}: no agent step for {int((now - _utc(t['heartbeat_at'])) // 60)} min")
+    st = data / "CEO_STATUS"
+    try:
+        s = json.loads(st.read_text())
+    except (OSError, ValueError):
+        s = None
+    if s:
+        if s.get("error") and now - float(s.get("error_since", now)) > CEO_ERROR_S:
+            out.append(f"supervisor failing for {int((now - float(s['error_since'])) // 60)} min "
+                       f"({s.get('error_count', '?')}x): untrusted-gent-text={json.dumps(str(s['error'])[:160])}")
+        if not running and now - float(s.get("ts", now)) > CEO_SILENT_S:
+            out.append(f"supervisor silent for {int((now - float(s['ts'])) // 60)} min with no task running "
+                       "(container stopped or hung?)")
+    return out
+
+
+# --- Notices -------------------------------------------------------------------------------
+# What Kent tells the operators (and his own chat) about Gents. Composed by Kent from structured
+# fields only: Gent free text never reaches a notice, because notices are put in front of Kent's
+# model at each chat turn (a Gent must not be able to write instructions into Kent's context).
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._/-]")
+
+
+def safe_name(name: str, limit: int = 60) -> str:
+    """A Gent-supplied file or task name, reduced to harmless characters."""
+    return _SAFE_NAME.sub("_", str(name))[:limit]
+
+
+def add_notice(kdb: sqlite3.Connection, stack_id: str | None, kind: str, text: str, limit: int = 600) -> int:
+    cur = kdb.execute("INSERT INTO notices (created_at, stack_id, kind, text) VALUES (datetime('now'),?,?,?)",
+                      (stack_id, kind, text[:limit]))
+    kdb.commit()
+    return cur.lastrowid
+
+
+def unread_notices(kdb: sqlite3.Connection, reader: str, mark: bool = True, limit: int = 20) -> list[sqlite3.Row]:
+    """Notices newer than what this reader has seen (oldest first); marks them read."""
+    row = kdb.execute("SELECT last_id FROM notice_reads WHERE reader=?", (reader,)).fetchone()
+    last = row[0] if row else 0
+    rows = kdb.execute("SELECT * FROM notices WHERE id > ? ORDER BY id LIMIT ?", (last, limit)).fetchall()
+    if mark and rows:
+        kdb.execute("INSERT INTO notice_reads (reader, last_id) VALUES (?, ?) "
+                    "ON CONFLICT(reader) DO UPDATE SET last_id = excluded.last_id", (reader, rows[-1]["id"]))
+        kdb.commit()
+    return rows

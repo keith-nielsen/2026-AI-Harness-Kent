@@ -67,6 +67,14 @@ def test_escalation_answered_into_inbox(env):
     assert ans["answer"] == "ANSWER" and ans["tier"] == "frontier"
     assert calls["chat"][0][0] == "frontier"
     assert reviews(kdb)[0]["verdict"] == "escalated"
+    # Group-readable: the inbox is setgid to the Gent's group, which Kent is not in
+    # (regression 2026-09-30: the Gent got "Permission denied" on its own answer).
+    assert (stacks / "aaaaaaaa" / "inbox" / "escalation-1.json").stat().st_mode & 0o777 == 0o640
+
+
+def test_spawn_makes_the_inbox_setgid_to_the_gents_group():
+    spawn = (Path(__file__).resolve().parents[2] / "install" / "services" / "gent" / "bin" / "kent-spawn-gent").read_text()
+    assert 'mkdir(stack / "inbox", 0o2750, op_pw.pw_uid, gid)' in spawn
 
 
 def test_escalation_budget_caps_frontier_spend(env):

@@ -30,10 +30,10 @@ OPT=/opt/kent-core; ETC=/etc/kent/kent; CRED=$ETC/credentials; DATA=/var/lib/ken
 UNITS=(kent-audit-anchor kent-audit-ingest kent-digest kent-poll-learnings kent-qa-audit)
 
 log "preflight"
-getent passwd kent >/dev/null || die "hermes module not installed (kent account missing)"
-getent group kent-operators >/dev/null || die "hermes module not installed (kent-operators group missing)"
-[[ -s /etc/kent/litellm/credentials/kent_key ]] || die "litellm module not installed (Kent's gateway key missing)"
-[[ -s /etc/kent/gitea/credentials/kent_token ]] || die "gitea module not installed (Kent's Gitea token missing)"
+need 'getent passwd kent >/dev/null' "hermes module not installed (kent account missing)"
+need 'getent group kent-operators >/dev/null' "hermes module not installed (kent-operators group missing)"
+need '[[ -s /etc/kent/litellm/credentials/kent_key ]]' "litellm module not installed (Kent's gateway key missing)"
+need '[[ -s /etc/kent/gitea/credentials/kent_token ]]' "gitea module not installed (Kent's Gitea token missing)"
 
 # --- Tools and entry points (root-owned) ----------------------------------------------------
 claim_path path "$OPT"
@@ -84,6 +84,8 @@ GATEWAY_KEY_FILE=$CRED/litellm_kent_key
 GITEA_URL=http://127.0.0.1:3000
 GITEA_TOKEN_FILE=$CRED/gitea_kent_token
 TEMPLATE_REPO=kent/stack-template
+# 1: when a Gent finishes, Kent assesses it (one frontier call) and puts the verdict in the notice
+AUTO_ASSESS=1
 CONF
 place_file file "$WORK/kent.conf" "$ETC/kent.conf" 0640 root kent
 place_file file /etc/kent/litellm/credentials/kent_key "$CRED/litellm_kent_key" 0640 root kent

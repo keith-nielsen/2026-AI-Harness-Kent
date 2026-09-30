@@ -44,7 +44,7 @@ audit_event "install started (profile=$PROFILE ${INVOCATION_ARGS})"
 log "preflight"
 [[ -x /usr/bin/python3.12 ]] || die "system Python 3.12 not found (Ubuntu 24.04 ships it)"
 command -v git >/dev/null || die "git is required"
-[[ -s /etc/kent/litellm/credentials/kent_key ]] || die "litellm module not installed (Kent's gateway key missing)"
+need '[[ -s /etc/kent/litellm/credentials/kent_key ]]' "litellm module not installed (Kent's gateway key missing)"
 
 # --- Accounts -------------------------------------------------------------------------
 ensure_service_account kent "$KHOME" "Kent agent"
@@ -99,9 +99,12 @@ if [[ "$have" != "$HERMES_COMMIT" ]]; then
     fi
 fi
 if [[ "$DRY_RUN" -eq 0 && ! -x "$OPT/venv/bin/hermes" ]]; then
-    log "building the Hermes environment from uv.lock (hash-verified, no extras)"
+    long_step "building the Hermes environment from uv.lock (hash-verified, no extras) — a few minutes on first install"
     # Hermes supports editable installs only; the tree it points at is root-owned and read-only.
-    ( cd "$OPT/src" && env -i PATH=/usr/bin:/bin HOME="$WORK" UV_CACHE_DIR="$WORK/cache" \
+    # Packages come from the download cache when present (uv checks them against uv.lock's hashes);
+    # copied, not hard-linked, so the venv shares no files with the cache.
+    UVCACHE="$WORK/cache"; cache_enabled && UVCACHE="$(cache_dir uv)"
+    ( cd "$OPT/src" && env -i PATH=/usr/bin:/bin HOME="$WORK" UV_CACHE_DIR="$UVCACHE" UV_LINK_MODE=copy \
         UV_PROJECT_ENVIRONMENT="$OPT/venv" UV_NO_CONFIG=1 UV_PYTHON_DOWNLOADS=never \
         "$OPT/bin/uv" sync --frozen --no-dev --python /usr/bin/python3.12 -q ) || die "uv sync failed"
 fi
@@ -174,6 +177,20 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
         || die "could not seed bundled skills"
     read -r n_copied n_updated n_total <<<"$seeded"
     log "stock skills: $n_total bundled ($n_copied newly seeded, $n_updated updated)"
+    # Consent for Kent's one shell hook (managed policy, configs/hermes/base.yaml `hooks:`): an
+    # allowlist entry for exactly that event and command, not hooks_auto_accept (which would also
+    # accept any hook Kent wrote into his own config). Other entries in the file are kept.
+    runuser -u kent -- env -i HOOKS="$HHOME/shell-hooks-allowlist.json" /usr/bin/python3 -c '
+import datetime, json, os, sys
+p, ev, cmd = os.environ["HOOKS"], "pre_llm_call", "/opt/kent-core/bin/kent_notices_hook.py"
+try: d = json.load(open(p))
+except (OSError, ValueError): d = {}
+a = [e for e in d.get("approvals", []) if isinstance(e, dict) and not (e.get("event") == ev and e.get("command") == cmd)]
+a.append({"event": ev, "command": cmd, "approved_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "approved_by": "kent-installer"})
+d["approvals"] = a
+fd = os.open(p + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f: json.dump(d, f, indent=2, sort_keys=True)
+os.replace(p + ".tmp", p)' || die "could not allowlist Kent's notices hook"
     install -d -m 0750 -o kent -g kent "$SK/kent"
     rm -rf "$SK/kent/crew-designer"
     cp -r "$KENT_ROOT/skills/kent/crew-designer" "$SK/kent/"

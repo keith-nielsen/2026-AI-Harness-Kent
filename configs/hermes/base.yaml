@@ -53,3 +53,8 @@ approvals:
     - "*docker *"
     - "*/etc/kent/*credentials*"
     - "*/etc/kent/hermes/managed*"
+
+hooks:                                  # consent: the Hermes installer allowlists exactly this command
+  pre_llm_call:                         # Kent's unread notices about Gents (finished, failed, halted, stuck)
+    - command: /opt/kent-core/bin/kent_notices_hook.py
+      timeout: 5
