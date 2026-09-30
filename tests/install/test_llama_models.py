@@ -12,6 +12,10 @@ import pytest
 
 SVC = Path(__file__).resolve().parents[2] / "install" / "services"
 LIB, PERMS = SVC / "lib-service.sh", SVC / "llama" / "models-perms.sh"
+# The files the shipped llama.env selects (MODEL_SET=mtp), and the other set.
+MTP = ("Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf", "Qwen3.6-35B-A3B-MTP-UD-F16-mmproj.gguf")
+UC = ("Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf",
+      "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-F16-mmproj.gguf")
 
 
 @pytest.fixture
@@ -21,12 +25,17 @@ def env(tmp_path):
     for name, mode in (("a.gguf", 0o644), ("b.gguf", 0o446), ("c.gguf", 0o444), ("d.safetensors", 0o600)):
         (models / name).write_bytes(b"x")
         (models / name).chmod(mode)
+    for name in MTP:
+        (models / name).write_bytes(b"x")
+        (models / name).chmod(0o444)
+    conf = tmp_path / "conf"   # no llama.env: the installer falls back to the shipped one
+    conf.mkdir()
     mdir = tmp_path / "manifest"
     mdir.mkdir()
     e = {**os.environ, "KENT_MANIFEST_DIR": str(mdir), "DRY_RUN": "1", "SERVICE": "llama",
          "KENT_PERMS_BACKUP": str(tmp_path / "models-perms"), "KENT_PROFILE_FILE": str(tmp_path / "profile"),
-         "KENT_OPERATOR": "administrator"}
-    return {"env": e, "models": models, "manifest": mdir / "llama", "tmp": tmp_path}
+         "KENT_OPERATOR": "administrator", "KENT_LLAMA_CONF": str(conf)}
+    return {"env": e, "models": models, "manifest": mdir / "llama", "tmp": tmp_path, "conf": conf}
 
 
 def funcs(env, script: str, manifest: str = "") -> subprocess.CompletedProcess:
@@ -38,7 +47,7 @@ def funcs(env, script: str, manifest: str = "") -> subprocess.CompletedProcess:
 
 def installer(env, *args: str, manifest: str) -> subprocess.CompletedProcess:
     # --rehash re-applies the models mode and re-records hashes; it runs before the build/GPU preflight.
-    env["manifest"].write_text(manifest + "file /etc/kent/llama/models.sha256\n")
+    env["manifest"].write_text(manifest + f"file {env['conf']}/models.sha256\n")
     return subprocess.run([str(SVC / "llama" / "install.sh"), "--dry-run", "--rehash",
                            "--models-dir", str(env["models"]), *args],
                           env=env["env"], capture_output=True, text=True)
@@ -119,6 +128,46 @@ def test_installer_keeps_recorded_mode_without_profile(env):
     assert "chown" not in r.stdout and "chmod a-w" in r.stdout
 
 
+def test_rehash_hashes_only_the_selected_model_files(env):
+    # Kent loads one model set: hashing every GGUF in the directory (185 GB) was minutes of I/O.
+    r = installer(env, manifest=f"modelsdir {env['models']}\nmodelsmode lab\n")
+    assert r.returncode == 0, r.stderr
+    hashed = [l for l in r.stdout.splitlines() if "would hash" in l]
+    assert len(hashed) == 2 and all(any(n in l for n in MTP) for l in hashed), hashed
+    assert "a.gguf" not in "".join(hashed)
+
+
+def test_rehash_refuses_when_a_selected_file_is_missing(env):
+    (env["models"] / MTP[1]).unlink()
+    r = installer(env, manifest=f"modelsdir {env['models']}\nmodelsmode lab\n")
+    assert r.returncode != 0 and f"{MTP[1]} (selected by MODEL_SET) not found" in r.stderr
+
+
+def set_model(env, value: str) -> subprocess.CompletedProcess:
+    # CTX=128k: the launcher rejects 256k for any set but mtp (measured there only).
+    shipped = (SVC / "llama" / "llama.env").read_text()
+    (env["conf"] / "llama.env").write_text(shipped.replace("CTX=256k", "CTX=128k"))
+    env["manifest"].write_text(f"modelsdir {env['models']}\nmodelsmode lab\nfile {env['conf']}/models.sha256\n")
+    return subprocess.run([str(SVC / "llama" / "install.sh"), "--dry-run", "--models-dir", str(env["models"]),
+                           "--set", f"MODEL_SET={value}"], env=env["env"], capture_output=True, text=True)
+
+
+def test_selecting_a_model_set_hashes_it_before_the_setting_is_written(env):
+    for name in UC:
+        (env["models"] / name).write_bytes(b"x")
+    r = set_model(env, "uc")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    assert all(f"would hash {n}" in out for n in UC) and not any(n in out for n in MTP)
+    assert out.index(f"would hash {UC[0]}") < out.index(f"{env['conf']}/llama.env")
+
+
+def test_selecting_a_missing_model_set_leaves_the_setting_unchanged(env):
+    r = set_model(env, "uc")
+    assert r.returncode != 0 and "(selected by MODEL_SET) not found" in r.stderr
+    assert f"{env['conf']}/llama.env" not in r.stdout
+
+
 def uninstall(env, manifest: str) -> subprocess.CompletedProcess:
     env["manifest"].write_text(manifest)
     return subprocess.run([str(SVC / "llama" / "uninstall.sh"), "--dry-run"],
@@ -139,3 +188,18 @@ def test_uninstall_hardened_restores_recorded_perms(env):
     assert r.returncode == 0, r.stderr
     assert f"chown administrator:administrator {m}/b.gguf" in r.stdout and f"chmod 446 {m}/b.gguf" in r.stdout
     assert f"chmod 0444 {m}/a.gguf" in r.stdout            # added after install: to the operator, 0444
+
+
+def test_dry_run_without_root_uses_shipped_settings_when_llama_env_is_unreadable(env):
+    # /etc/kent/llama is 0751: a non-root dry run can reach llama.env (0640) but not read it.
+    # Regression: the failed read selected no model files ("check MODEL_SET"), hiding the cause.
+    envf = env["conf"] / "llama.env"
+    envf.write_text("MODEL_SET=uc\n")
+    envf.chmod(0)
+    try:
+        r = installer(env, manifest=f"modelsdir {env['models']}\nmodelsmode lab\n")
+    finally:
+        envf.chmod(0o640)
+    assert r.returncode == 0, r.stderr
+    assert "cannot read" in r.stderr and "assuming the shipped settings (MODEL_SET=mtp)" in r.stderr
+    assert all(f"would hash {n}" in r.stdout for n in MTP)

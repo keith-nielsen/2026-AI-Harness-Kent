@@ -2,12 +2,18 @@
 # Read-only view of the model directory for the local model server (kent-llama.service).
 # Installed by install/services/llama/install.sh. Started on demand with kent-llama.service; needs
 # the source filesystem to be mounted (systemd orders it after the mount holding @SRC@).
+# Shutdown: After=udisks2.service stops this bind before udisks exits, so a desktop-automounted
+# source is released while udisks can still clean up its mount point (narrows the race that left
+# an empty DATA behind, so the drive came back as DATA1; an fstab mount avoids it entirely).
+# LazyUnmount: a busy view (a shell inside it, a hash run) never stalls shutdown; it is read-only.
 
 [Unit]
 Description=Kent model directory, read-only (@SRC@)
+After=udisks2.service
 
 [Mount]
 What=@SRC@
 Where=/srv/kent/models
 Type=none
 Options=bind,ro,nodev,nosuid,noexec
+LazyUnmount=yes

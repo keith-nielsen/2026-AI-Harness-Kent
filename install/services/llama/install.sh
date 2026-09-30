@@ -9,7 +9,8 @@
 #   models   MODELS_DIR (default /media/administrator/DATA/models), by profile (models-perms.sh):
 #            lab: files keep their owner, only write bits are removed; hardened: root:kent-models,
 #            directory 0750, files 0440, originals recorded and restored on uninstall. Both: SHA-256
-#            of every *.gguf in /etc/kent/llama/models.sha256; the service refuses to load a file
+#            of the model files MODEL_SET selects in /etc/kent/llama/models.sha256 (another set is hashed
+#            when selected with --set); the service refuses to load a file
 #            whose hash does not match.
 #   mount    srv-kent-models.mount: MODELS_DIR bound read-only at /srv/kent/models (ro,nodev,nosuid,noexec)
 #   units    kent-llama.service (127.0.0.1:8080, hardened, not enabled at boot) and
@@ -32,7 +33,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../lib-service.sh"
 source "$HERE/models-perms.sh"
 
-OPT=/opt/kent-llama; CONF=/etc/kent/llama; SUMS=$CONF/models.sha256; UNIT=kent-llama.service
+OPT=/opt/kent-llama; CONF="${KENT_LLAMA_CONF:-/etc/kent/llama}"; SUMS=$CONF/models.sha256; UNIT=kent-llama.service   # CONF: override only for tests
 MOUNT_UNIT=srv-kent-models.mount; MNT=/srv/kent/models
 RULE=/etc/polkit-1/rules.d/60-kent-llama.rules
 FROM="${KENT_LLAMA_BUILD:-}"; MODELS_DIR=""; START=1; SET=""; REHASH_ONLY=0; PROFILE_ARG=""
@@ -63,12 +64,12 @@ set_value() {  # set_value KEY=VALUE — validated against the launcher before i
     if ! (set -a; source "$tmp"; set +a; MODELDIR="$MNT" "$HERE/bin/kent_llama_launch.py" --print >/dev/null); then
         rm -f "$tmp"; die "rejected: $key=$val is not a valid setting (llama.env unchanged)"
     fi
+    # A new model set is hashed before it is selected: a missing file leaves llama.env unchanged.
+    if [[ "$key" == MODEL_SET ]]; then record_hashes "$tmp"; fi
     run install -m 0640 -o root -g kent-llama "$tmp" "$CONF/llama.env"; rm -f "$tmp"
     audit_event "setting $key=$val"
     log "set $key=$val. Takes effect at the next start: kent llama restart"
 }
-[[ -n "$SET" ]] && { set_value "$SET"; exit 0; }
-
 current_models_dir() { sed -n "s/^What=//p" "/etc/systemd/system/$MOUNT_UNIT" 2>/dev/null || true; }
 [[ -n "$MODELS_DIR" ]] || MODELS_DIR="$(current_models_dir)"
 [[ -n "$MODELS_DIR" ]] || MODELS_DIR=/media/administrator/DATA/models
@@ -77,14 +78,39 @@ MODELS_DIR="$(realpath -m "$MODELS_DIR")"
 PREV_MODE="$(models_mode_recorded)"
 MODE="$(resolve_models_mode "$PROFILE_ARG")"
 
-# SHA-256 of every GGUF (the kind of file this service loads), recorded root-owned.
-record_hashes() {
-    local tmp n; tmp="$(mktemp)"
-    log "hashing GGUF files in $MODELS_DIR (this reads every file once; can take minutes)"
-    if [[ "$DRY_RUN" -eq 0 ]]; then
-        find "$MODELS_DIR" -maxdepth 1 -type f -name '*.gguf' -print0 | xargs -0 -r -P 4 -n 1 sha256sum \
-            | awk '{ h = $1; sub(/^[^ ]+  /, ""); n = split($0, p, "/"); print h "  " p[n] }' | sort -k2 > "$tmp"
+# The model files the settings select (MODEL_SET), by name: the launcher decides, so the record
+# and the start-time check (kent-llama-verify) always agree on which files matter.
+selected_models() {  # selected_models [ENV_FILE] (default: the installed llama.env, else the shipped one)
+    local env="${1:-$CONF/llama.env}"
+    if [[ ! -e "$env" ]]; then env="$HERE/llama.env"     # first install: the shipped settings
+    elif [[ ! -r "$env" ]]; then
+        # A dry run without root (unshare -r) can reach the installed llama.env (directory 0751) but
+        # not read it (0640): say so and use the shipped settings, rather than select nothing.
+        [[ "$DRY_RUN" -eq 1 ]] || die "cannot read $env"
+        warn "dry run: cannot read $env (not root); assuming the shipped settings (MODEL_SET=$(sed -n 's/^MODEL_SET=//p' "$HERE/llama.env"))"
+        env="$HERE/llama.env"
     fi
+    # shellcheck disable=SC1090  # llama.env: root-owned, or a candidate the launcher just validated
+    (set -a; source "$env"; set +a; MODELDIR=/ "$HERE/bin/kent_llama_launch.py" --files) | xargs -r -n 1 basename
+}
+
+# SHA-256 of the selected model files only (not every GGUF in the directory: Kent loads one set),
+# recorded root-owned. Another set is hashed when it is selected (--set MODEL_SET=...).
+record_hashes() {  # record_hashes [ENV_FILE]
+    local tmp n f name t0 gb; tmp="$(mktemp)"
+    local -a names; mapfile -t names < <(selected_models "${1:-}")
+    [[ ${#names[@]} -gt 0 ]] || die "the settings select no model files (check MODEL_SET)"
+    for name in "${names[@]}"; do
+        f="$MODELS_DIR/$name"
+        [[ -f "$f" ]] || die "model file $name (selected by MODEL_SET) not found in $MODELS_DIR"
+        gb="$(du -BG --apparent-size "$f" | cut -f1)"
+        if [[ "$DRY_RUN" -eq 1 ]]; then log "dry run: would hash $name ($gb)"; continue; fi
+        long_step "hashing $name ($gb) — reads the whole file once, up to a minute or two"
+        t0=$SECONDS
+        sha256sum "$f" | awk -v n="$name" '{ print $1 "  " n }' >> "$tmp"
+        log "  hashed $name in $((SECONDS - t0)) s"
+    done
+    sort -k2 -o "$tmp" "$tmp"
     n="$(wc -l < "$tmp")"
     # Audit trail: what this rehash changed, per file, and who ran it. The previous record is kept
     # beside the new one (inside /etc/kent/llama, which the module claims, so uninstall removes it).
@@ -104,7 +130,24 @@ record_hashes() {
     fi
     run install -m 0644 -o root -g root "$tmp" "$SUMS"; rm -f "$tmp"
     audit_event "recorded SHA-256 of $n model files"
-    log "recorded SHA-256 of $n GGUF files in $SUMS"
+    if [[ "$DRY_RUN" -eq 1 ]]; then log "dry run: would record SHA-256 of the selected model files in $SUMS"
+    else log "recorded SHA-256 of $n selected model files in $SUMS"; fi
+}
+
+# Where the models live, by filesystem (UUID + path inside it), so a failed start can name a moved
+# or missing drive (kent-llama-source diagnose, run by `kent llama start`). A desktop automount
+# (udisks, not in fstab) appears only after the operator logs in and can change name after an
+# unclean shutdown (DATA -> DATA1): lab warns, hardened refuses it.
+record_source() {
+    local tmp; tmp="$(mktemp)"
+    python3 "$HERE/bin/kent_llama_source.py" record "$MODELS_DIR" > "$tmp" || { rm -f "$tmp"; die "cannot tell which filesystem holds $MODELS_DIR"; }
+    if grep -qx 'automount 1' "$tmp"; then
+        local mp; mp="$(sed -n 's/^mountpoint //p' "$tmp")"
+        [[ "$MODE" != hardened ]] || { rm -f "$tmp"; die "$MODELS_DIR is on a desktop automount ($mp): the hardened profile needs a system mount (an /etc/fstab entry)"; }
+        warn "$MODELS_DIR is on a desktop automount ($mp): the model server can start only after you log in, and the mount point can change name after an unclean shutdown. An /etc/fstab entry for the drive avoids both."
+    fi
+    claim_path file "$CONF/models.source"
+    run install -m 0644 -o root -g root "$tmp" "$CONF/models.source"; rm -f "$tmp"
 }
 
 # The operator reads the locked-down models through kent-models (hardened only; in lab the files
@@ -117,8 +160,11 @@ operator_reads_models() {
     fi
 }
 
+[[ -n "$SET" ]] && { set_value "$SET"; exit 0; }
+
 if [[ "$REHASH_ONLY" -eq 1 ]]; then
     manifest_has modelsdir "$MODELS_DIR" || die "not installed (models directory not recorded)"
+    record_source           # first: hardened refuses an automount before anything changes
     operator_reads_models   # a switch from lab to hardened (kent-admin profile hardened)
     apply_models_mode "$MODE" "$PREV_MODE"; record_hashes; exit 0
 fi
@@ -135,6 +181,10 @@ if ! port_free 8080 && ! systemctl is-active --quiet "$UNIT"; then
     die "port 8080 is in use by another process; stop your own llama-server first"
 fi
 [[ -d /etc/polkit-1/rules.d ]] || die "polkit rules directory missing (/etc/polkit-1/rules.d)"
+[[ -d "$MODELS_DIR" ]] || die "models directory $MODELS_DIR not found (is the drive mounted?)"
+if [[ "$MODE" == hardened ]] && python3 "$HERE/bin/kent_llama_source.py" record "$MODELS_DIR" 2>/dev/null | grep -qx 'automount 1'; then
+    die "$MODELS_DIR is on a desktop automount: the hardened profile needs a system mount (an /etc/fstab entry)"
+fi
 
 ensure_service_account kent-llama /nonexistent "Kent local model server (llama.cpp)"
 if ! getent group kent-models >/dev/null; then
@@ -171,13 +221,16 @@ if [[ "$(readlink -f "$FROM")" != "$OPT/bin" ]]; then
 fi
 run install -m 0755 -o root -g root "$HERE/bin/kent_llama_launch.py" "$OPT/libexec/kent-llama-launch"
 run install -m 0755 -o root -g root "$HERE/bin/kent_llama_hashes.py" "$OPT/libexec/kent-llama-hashes"
+run install -m 0755 -o root -g root "$HERE/bin/kent_llama_source.py" "$OPT/libexec/kent-llama-source"
 for s in kent-llama-verify kent-llama-wait kent-llama-tuning; do
     run install -m 0755 -o root -g root "$HERE/libexec/$s" "$OPT/libexec/$s"
 done
 
 # --- Config ---
 claim_path path "$CONF"
-ensure_dir "$CONF" 0750 root kent-llama
+# 0751: operators can read the records by name (models.sha256, models.source: not secret, so they
+# can check the models themselves) but not list the directory; llama.env stays 0640.
+ensure_dir "$CONF" 0751 root kent-llama
 [[ -f "$CONF/llama.env" ]] || place_file file "$HERE/llama.env" "$CONF/llama.env" 0640 root kent-llama
 # systemd creates the unit's CacheDirectory (CUDA kernel cache) on first start; record it so
 # uninstall always removes it (a cache: `path`, not `state`).
@@ -185,6 +238,7 @@ manifest_add path /var/cache/kent-llama
 
 # --- Models: apply the profile's mode, hash, read-only mount ---
 apply_models_mode "$MODE" "$PREV_MODE"
+record_source
 record_hashes
 ensure_dir /srv/kent 0755 root root
 ensure_dir "$MNT" 0755 root root
@@ -202,7 +256,7 @@ place_file file "$HERE/60-kent-llama.rules" "$RULE" 0644 root root
 run systemctl daemon-reload
 
 if [[ "$START" -eq 1 && "$DRY_RUN" -eq 0 ]]; then
-    log "starting $UNIT (hash check and model load take a minute or two)"
+    long_step "starting $UNIT — checks the model hashes and loads the model, a minute or two"
     systemctl restart "$UNIT" || die "$UNIT failed to start; see journalctl -u $UNIT"
     opts="$(findmnt -rn -o OPTIONS "$MNT")"
     for o in ro nodev nosuid noexec; do [[ ",$opts," == *",$o,"* ]] || die "$MNT is not mounted $o ($opts)"; done
