@@ -1,12 +1,25 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.4
+version: 3.2.5
 date: 2026-09-30
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.5
+    date: 2026-09-30
+    summary: >
+      The local model server runs two slots with a unified KV cache (`--parallel 2
+      -kvu`, was one slot) and logs errors only (`-lv 1`). Measured on the reference
+      machine: total decode stays at ~35 tok/s whatever the slot count (every expert
+      layer runs on the CPU), so two slots let Kent and a Gent, or two Gent workers, run
+      at once instead of queueing, each with the full 256k context, while a single
+      stream keeps 31 of 32 tok/s. Four slots added nothing (~9 tok/s each). A long
+      prompt still slows the other slot to ~5 tok/s while it prefills; smaller `-ub`
+      made that worse and cut prefill (1024 stays). `-t 6` was no faster than `-t 5`.
+      Re-installing the llama module while the models mount is up no longer fails
+      (it re-permissioned the read-only mount point).
   - version: 3.2.4
     date: 2026-09-30
     summary: >
@@ -283,7 +296,8 @@ The local model is llama.cpp's `llama-server`, run on demand as `kent-llama.serv
 account cannot). It runs as `kent-llama` from a root-owned copy of the build in
 `/opt/kent-llama`, with settings in `/etc/kent/llama/llama.env` (the measured optimum:
 Qwen3.6-35B-A3B MTP, 256k context, `-ncmoe 40`, non-thinking; change with
-`kent-admin llama set`). Ownership of the model files follows the profile: in **lab** they
+`kent-admin llama set`). It serves two requests at once (`--parallel 2` with a unified KV
+cache, so each can use the whole context); the slot count is fixed in the launcher. Ownership of the model files follows the profile: in **lab** they
 stay the operator's (Kent only removes their write bits, so they must be world-readable, and
 uninstall leaves them); in **hardened** they are `root:kent-models` (0750/0440), the originals
 are recorded and restored on uninstall (`kent-admin profile` switches and re-applies). In both,

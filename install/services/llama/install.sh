@@ -241,7 +241,8 @@ apply_models_mode "$MODE" "$PREV_MODE"
 record_source
 record_hashes
 ensure_dir /srv/kent 0755 root root
-ensure_dir "$MNT" 0755 root root
+# While the read-only bind mount is up, the directory underneath cannot be re-permissioned (EROFS).
+findmnt -rn "$MNT" >/dev/null || ensure_dir "$MNT" 0755 root root
 WORK="${WORK:-$(mktemp -d)}"; trap 'rm -rf "$WORK"' EXIT
 sed "s#@SRC@#$MODELS_DIR#g" "$HERE/systemd/$MOUNT_UNIT.in" > "$WORK/$MOUNT_UNIT"
 if findmnt -rn "$MNT" >/dev/null && [[ "$(current_models_dir)" != "$MODELS_DIR" ]]; then

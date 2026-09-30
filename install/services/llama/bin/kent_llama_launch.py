@@ -2,7 +2,10 @@
 """kent-llama-launch — start llama-server for kent-llama.service from /etc/kent/llama/llama.env.
 
 Ported from the operator's measured launcher (llamaserver-qwen36-optimum.sh, 2026-09-06);
-the reasoning behind every number is in that script's header. The system tuning it applied
+the reasoning behind every number is in that script's header. Two slots with a unified KV cache
+(2026-09-30 tuning pass): two requests run at once, each can use the whole context, and a single
+stream keeps ~97% of its one-slot speed; total decode is capped at ~35 tok/s by the CPU experts,
+so more slots only split it. The system tuning it applied
 with sudo (SMT off, CPU boost off) is done by kent-llama-tuning.service, as root, not here.
 
   kent-llama-launch            exec llama-server
@@ -82,12 +85,12 @@ def build_argv(env: dict) -> list[str]:
             "-mm", mmproj, "--no-mmproj-offload",
             "-ngl", "99", "-ncmoe", str(ncmoe), "-c", str(nctx),
             "-t", "5", "-tb", "4", "-ub", str(ub),
-            "--jinja", "--no-mmap", "--parallel", "1",
+            "--jinja", "--no-mmap", "--parallel", "2", "-kvu",
             "-fa", "on", "-ctk", ctk, "-ctv", ctv,
             "--spec-type", "none",
             *SAMPLING[think],
             "--host", HOST, "--port", PORT,
-            "-lv", "4"]
+            "-lv", "1"]
     if (env.get("PIN", "0") or "0") == "1":
         cores = env.get("CORES", "2,4,5,6,7") or "2,4,5,6,7"
         if not all(c.isdigit() for c in cores.replace("-", ",").split(",")):
