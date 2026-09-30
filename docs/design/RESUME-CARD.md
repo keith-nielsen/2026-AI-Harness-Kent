@@ -31,10 +31,10 @@
   drive as `DATA1` (Kent's bind mount held DATA past udisks' exit). Operator fixed it by hand; Kent now
   records the models' filesystem (`/etc/kent/llama/models.source`), diagnoses it on `kent llama start`,
   orders its mount after udisks2 and unmounts lazily. An fstab entry (operator's call) is the real fix.
-- Gents (all complete, kept on purpose; do not destroy): `d3170b46` solar-magnetic paper (old image);
-  `4d3f9706` kent-check run 1 (baseline, old image); `602a6426` kent-check run 2 (new image: team verdict
-  PASS, frontier review accept 4/5, all 6 tasks pass). Template learnings adopted so far: separate
-  empirical from derived formulas; verify arithmetic with scripts; hand off results as JSON.
+- Gents (destroy test done 2026-09-30 ~15:33): `d3170b46` solar-magnetic **purged**; `4d3f9706` and
+  `602a6426` (kent-check runs 1 and 2, the comparison baselines) **archived** under
+  /var/lib/kent-gent/archive (export with `kent gent export ID DIR`). No live Gents. Template learnings adopted
+  so far: separate empirical from derived formulas; verify arithmetic with scripts; hand off results as JSON.
 
 **Built today (architecture 3.2.3–3.2.4; details in docs/architecture.md changelog, §7.5, §8.2)**
 - llama: hash only the MODEL_SET files; `/etc/kent/llama` 0751 (operators can `sha256sum -c` the record);
