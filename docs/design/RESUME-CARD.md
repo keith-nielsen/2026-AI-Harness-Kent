@@ -51,13 +51,14 @@
   Kent overview "Host CPU busy and temperature" dual-axis panel.
 
 **Next (agreed with the operator)**
-1. **llama.cpp tuning pass** (current tuning was for a single user): benchmark `--parallel` 1/2/4,
-   `--kv-unified` on/off (never tried), `-lv 4` vs `-lv 1` (tune at 4, finish at 1), and re-check
-   `-t 5 -tb 4` and boost-off under parallel load. `--parallel` and `-lv` are hard-coded in
-   `kent_llama_launch.py` (not llama.env keys). Current args: `-ngl 99 -ncmoe 40 -c 262144 -t 5 -tb 4
-   -ub 1024 --no-mmap --parallel 1 -fa on -ctk q8_0 -ctv turbo3 --spec-type none -rea off -lv 4`; SMT and
-   boost off while running. Model is hybrid (10 of 40 layers KV; 7.3 KiB/token cache; 63 MiB recurrent
-   state per slot; "no partial sequence removal" → checkpoint-based prompt reuse).
+1. ~~llama.cpp tuning pass~~ **done 2026-09-30 16:45** (architecture 3.2.5): `--parallel 2 -kvu -lv 1`, rest
+   unchanged (`-t 5 -tb 4 -ub 1024`, SMT/boost off). Total decode ~35 tok/s at any slot count (CPU experts);
+   1 stream 31 vs 32 tok/s; np4 ~9 tok/s each; a long prefill slows the other slot to ~5 tok/s; `-ub` 512/256
+   worse; `-t 6` no gain; `-t 7` skipped (operator: leaves one core). Raw numbers: bench in the session
+   scratchpad (not kept). **Deployed ~17:20**: live service 2 slots × 262144, two concurrent
+   requests ~18 tok/s each. Install first failed re-permissioning the mounted read-only mount point
+   (fixed in llama/install.sh). SMT and boost were off when the service started, so the tuning unit
+   restores them to off (operator's choice for SMT; boost can be set back by hand).
 2. Re-run the capability check after changes (prompt below), compare with 4d3f9706 / 602a6426.
 3. Then the release steps above.
 
