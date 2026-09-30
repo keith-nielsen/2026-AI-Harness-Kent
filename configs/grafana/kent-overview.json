@@ -121,7 +121,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Host CPU busy",
+      "title": "Host CPU busy and temperature",
       "datasource": {
         "type": "prometheus",
         "uid": "kent-prometheus"
@@ -135,18 +135,130 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
           "datasource": {
             "type": "prometheus",
             "uid": "kent-prometheus"
-          }
+          },
+          "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
+          "legendFormat": "CPU busy"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kent-prometheus"
+          },
+          "expr": "node_hwmon_temp_celsius{chip=\"pci0000:00_0000:00:18_3\", sensor=\"temp1\"}",
+          "legendFormat": "CPU Tctl"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kent-prometheus"
+          },
+          "expr": "kent_gpu_temperature_celsius",
+          "legendFormat": "GPU"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "axisPlacement": "left",
+            "axisLabel": "CPU busy",
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "min",
+                "value": 20
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "temperature"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "min",
+                "value": 20
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "temperature"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Left axis: CPU busy (all cores, 5-minute rate). Right axis: CPU control temperature (k10temp Tctl) and GPU temperature (nvidia-smi every 15 s, bold red).",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
       }
     },
     {

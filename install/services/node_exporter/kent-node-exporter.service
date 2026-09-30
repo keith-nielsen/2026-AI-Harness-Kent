@@ -9,7 +9,9 @@ Wants=network-online.target
 Type=simple
 User=node_exporter
 Group=node_exporter
-ExecStart=/opt/kent-node-exporter/node_exporter --web.listen-address=127.0.0.1:9100
+# Textfile collector: kent-gpu-metrics.timer writes the GPU metrics there (read-only here).
+ExecStart=/opt/kent-node-exporter/node_exporter --web.listen-address=127.0.0.1:9100 \
+    --collector.textfile.directory=/var/lib/kent-node-exporter/textfile
 Restart=on-failure
 RestartSec=5
 

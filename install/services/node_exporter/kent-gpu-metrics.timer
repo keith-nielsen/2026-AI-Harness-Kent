@@ -1,0 +1,11 @@
+# /etc/systemd/system/kent-gpu-metrics.timer — installed by install/services/node_exporter
+[Unit]
+Description=Kent: NVIDIA GPU metrics every 15 s
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

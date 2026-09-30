@@ -1,0 +1,29 @@
+# /etc/systemd/system/kent-gpu-metrics.service — installed by install/services/node_exporter
+# Writes NVIDIA GPU metrics for node_exporter's textfile collector (run by kent-gpu-metrics.timer).
+[Unit]
+Description=Kent: NVIDIA GPU metrics for node_exporter (temperature, load, power, memory)
+
+[Service]
+Type=oneshot
+User=node_exporter
+Group=node_exporter
+ExecStart=/opt/kent-node-exporter/kent-gpu-metrics /var/lib/kent-node-exporter/textfile/gpu.prom
+# nvidia-smi needs /dev/nvidia* (so no PrivateDevices) and the driver's libraries.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kent-node-exporter/textfile
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+UMask=0022
