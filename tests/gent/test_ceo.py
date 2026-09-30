@@ -35,7 +35,8 @@ def ceo(tmp_path, monkeypatch):
     monkeypatch.setenv("GENT_WORKSPACE", str(data / "workspace"))
     monkeypatch.setenv("POLL_INTERVAL", "0")
 
-    state = {"crew_outputs": [], "verdicts": [], "router": (False, ""), "kickoffs": 0, "raise": None}
+    state = {"crew_outputs": [], "verdicts": [], "router": (False, ""), "kickoffs": 0, "raise": None,
+             "descriptions": [], "max_tokens": [], "agent_writes": {}}
 
     class FakeCrew:
         def kickoff(self):
@@ -43,11 +44,15 @@ def ceo(tmp_path, monkeypatch):
             if state["raise"]:
                 exc, state["raise"] = state["raise"], None
                 raise exc
+            for name, text in state["agent_writes"].items():   # the agent used Write File
+                (data / "workspace" / name).write_text(text)
             return types.SimpleNamespace(raw=state["crew_outputs"].pop(0) if state["crew_outputs"] else "ok")
 
     crew_mod = types.ModuleType("gent.crew")
     def fake_build(*a, on_step=None, **k):
         state["on_step"] = on_step
+        state["descriptions"].append(a[2])
+        state["max_tokens"].append(k.get("max_tokens"))
         return FakeCrew()
     crew_mod.build_crew = fake_build
     router_mod = types.ModuleType("gent.router")
@@ -61,6 +66,7 @@ def ceo(tmp_path, monkeypatch):
     main = importlib.import_module("gent.main")
 
     def fake_chat(key, system, user, max_tokens=800):
+        state.setdefault("chats", []).append((system, user))
         if "review task results" in system:
             return json.dumps(state["verdicts"].pop(0) if state["verdicts"] else {"passed": True})
         if "lessons" in system:
@@ -226,3 +232,165 @@ def test_resume_token_requeues_failed_tasks_once(ceo):
     c.execute("UPDATE kanban SET status='failed' WHERE title='a'"); c.commit()
     main.resume_requested(c)
     assert tasks(data)["a"]["status"] == "failed"          # same token is not reused
+
+
+# --- Deliverables, retries and token limits (2026-09-30 research run: findings returned as
+# text instead of written, the retry repeated the mistake, the answer was cut off) ---------------
+FINDINGS = "# Findings\n" + "1. Reconnection drives convection. Source: https://doi.org/10.1103/PhysRevLett.6.47\n" * 5
+
+
+def one_task(data, extra: str) -> None:
+    (data / "project" / "tasks.yaml").write_text(
+        "a:\n  agent: dev\n  description: write findings\n  expected_output: findings.md\n" + extra)
+
+
+def test_final_answer_is_saved_as_the_named_deliverable(ceo):
+    main, state, data, _ = ceo
+    one_task(data, "  output: findings.md\n")
+    state["crew_outputs"] = [FINDINGS]
+    main.seed(main.db()); step(main)
+    assert (main.WORKSPACE / "findings.md").read_text() == FINDINGS.strip() + "\n"
+    assert "Save the deliverable as findings.md" in state["descriptions"][0]
+    assert tasks(data)["a"]["status"] == "done"
+
+
+def test_a_file_the_agent_wrote_is_not_overwritten(ceo):
+    main, state, data, _ = ceo
+    one_task(data, "  output: findings.md\n")
+    state["agent_writes"] = {"findings.md": "agent's own file"}
+    state["crew_outputs"] = [FINDINGS]
+    main.seed(main.db()); step(main)
+    assert (main.WORKSPACE / "findings.md").read_text() == "agent's own file"
+
+
+def test_a_short_final_answer_is_not_taken_for_the_deliverable(ceo):
+    main, state, data, _ = ceo
+    one_task(data, "  output: findings.md\n")
+    state["crew_outputs"] = ["findings.md written"]
+    main.seed(main.db()); step(main)
+    assert not (main.WORKSPACE / "findings.md").exists()
+
+
+def test_a_fenced_answer_is_saved_without_the_fence(ceo):
+    main, state, data, _ = ceo
+    one_task(data, "  output: sub/paper.md\n")
+    state["crew_outputs"] = ["```markdown\n" + FINDINGS + "```\n"]
+    main.seed(main.db()); step(main)
+    assert (main.WORKSPACE / "sub" / "paper.md").read_text().startswith("# Findings")
+
+
+@pytest.mark.parametrize("name", ["../escape.md", "/etc/passwd", "outputs/t01-a.md", "."])
+def test_output_must_stay_inside_the_workspace(ceo, name):
+    main, _, _, _ = ceo
+    with pytest.raises(ValueError):
+        main.output_path({"output": name})
+    assert main.output_path({"output": "/data/workspace/ok.md"}) == (main.WORKSPACE / "ok.md").resolve()
+
+
+def test_retry_is_told_why_the_first_attempt_failed(ceo):
+    main, state, data, _ = ceo
+    state["verdicts"] = [{"passed": False, "critique": "no file was written"}, {"passed": True}]
+    main.seed(main.db())
+    step(main); step(main)
+    assert "rejected by the reviewer" not in state["descriptions"][0]
+    assert "rejected by the reviewer: no file was written" in state["descriptions"][1]
+    assert tasks(data)["a"]["status"] == "done"
+
+
+def test_task_max_tokens_reaches_the_crew(ceo):
+    main, state, data, _ = ceo
+    one_task(data, "  max_tokens: 6000\n")
+    main.seed(main.db()); step(main)
+    assert state["max_tokens"] == [6000]
+
+
+def test_token_limits_default_and_cap(tmp_path, monkeypatch):
+    # crew.py needs crewai (image only): stub it and capture what the LLM is given.
+    fake = types.ModuleType("crewai")
+    class LLM:
+        def __init__(self, **k): self.k = k
+    fake.LLM, fake.Agent, fake.Crew, fake.Task = LLM, object, object, object
+    fake.Process = types.SimpleNamespace(sequential="sequential")
+    tools = types.ModuleType("gent.tools"); tools.all_tools = lambda: []
+    monkeypatch.setitem(sys.modules, "crewai", fake)
+    monkeypatch.setitem(sys.modules, "gent.tools", tools)
+    monkeypatch.syspath_prepend(str(ROOT / "templates" / "app"))
+    monkeypatch.setenv("GENT_PROJECT", str(tmp_path))
+    sys.modules.pop("gent.crew", None)
+    crew = importlib.import_module("gent.crew")
+    (tmp_path / "project.yaml").write_text("name: T\n")
+    assert crew.llm("k").k["max_tokens"] == 4000                  # was 1500: cut off real answers
+    assert crew.llm("k", max_tokens=6000).k["max_tokens"] == 6000
+    assert crew.llm("k", max_tokens=10**6).k["max_tokens"] == crew.MAX_TOKENS_CAP
+    (tmp_path / "project.yaml").write_text("name: T\nlimits: {max_tokens: 2500}\n")
+    assert crew.llm("k").k["max_tokens"] == 2500
+    sys.modules.pop("gent.crew", None)
+
+
+def test_ceo_status_tracks_a_repeating_error(ceo):
+    # Kent's stuck-Gent check reads /data/CEO_STATUS: one error repeated every pass must show
+    # when it started and how often, and clear once a pass succeeds.
+    main, _, data, _ = ceo
+    s = main.write_status("PermissionError: /inbox/escalation-1.json", {})
+    first = s["error_since"]
+    s = main.write_status("PermissionError: /inbox/escalation-1.json", s)
+    assert s["error_since"] == first and s["error_count"] == 2
+    s = main.write_status("OSError: other", s)
+    assert s["error_count"] == 1 and s["error_since"] >= first
+    s = main.write_status(None, s)
+    on_disk = json.loads((data / "CEO_STATUS").read_text())
+    assert on_disk["error"] is None and on_disk["error_count"] == 0 and on_disk["ts"] >= first
+
+
+def events(data):
+    con = sqlite3.connect(data / "stack.db"); con.row_factory = sqlite3.Row
+    return [dict(r) for r in con.execute("SELECT * FROM events ORDER BY id")]
+
+
+def test_ceo_reports_to_kent_through_events(ceo):
+    # Worker -> Gent is the task result; Gent -> Kent is stack.db events (read by Kent every minute).
+    main, state, data, inbox = ceo
+    state["agent_writes"] = {"a.md": "result a"}
+    main.seed(main.db())
+    step(main)                                   # a: done, wrote a.md
+    step(main)                                   # b: forced escalation
+    esc = [l for l in learnings(data) if l["category"] == "escalation_request"][0]
+    (inbox / f"escalation-{esc['id']}.json").write_text(json.dumps({"answer": "x", "tier": "frontier"}))
+    step(main)                                   # b: resumed and done
+    main.finalize("sk-test", main.db())
+    ev = events(data)
+    assert [e["kind"] for e in ev] == ["task_done", "escalated", "resumed", "task_done", "project_complete"]
+    assert json.loads(ev[0]["detail"])["files"] == ["a.md"] and ev[0]["task_id"] == "t01-a"
+    assert json.loads(ev[3]["detail"])["escalated"] is True
+    assert "a.md" in json.loads(ev[-1]["detail"])["files"]
+
+
+def test_review_task_reports_only_its_overall_verdict(ceo):
+    main, state, data, _ = ceo
+    (data / "project" / "tasks.yaml").write_text(
+        "review:\n  agent: dev\n  description: check\n  output: review.md\n  verdict: true\n")
+    state["agent_writes"] = {"review.md": "a.md: PASS\nb.md: FAIL, overall PASS would be wrong\nOverall: FAIL\n"}
+    main.seed(main.db()); step(main)
+    main.finalize("sk-test", main.db())
+    ev = events(data)
+    assert json.loads(ev[0]["detail"])["verdict"] == "FAIL"           # the last "overall" line wins
+    assert json.loads(ev[-1]["detail"])["review"] == "FAIL"
+    assert main.review_verdict("no verdict here") is None
+
+
+def test_workers_and_validator_know_todays_date_and_kents_answer(ceo):
+    # 2026-09-30: without the date, the validator rejected a correct 2026 release date as
+    # "in the future" and the task escalated until the breaker would trip.
+    main, state, data, inbox = ceo
+    main.seed(main.db())
+    step(main)                                          # a: plain task
+    today = main.today()
+    assert f"Today's date (UTC): {today}." in state["descriptions"][0]
+    system, user = [cu for cu in state["chats"] if "review task results" in cu[0]][0]
+    assert f"Today's date (UTC) is {today}" in system and "EXPERT GUIDANCE" not in user
+    step(main)                                          # b escalates
+    esc = [l for l in learnings(data) if l["category"] == "escalation_request"][0]
+    (inbox / f"escalation-{esc['id']}.json").write_text(json.dumps({"answer": "7.2.8 is correct", "tier": "frontier"}))
+    step(main)                                          # b resumed: the validator sees Kent's answer
+    system, user = [cu for cu in state["chats"] if "review task results" in cu[0]][-1]
+    assert "EXPERT GUIDANCE FROM KENT" in user and "7.2.8 is correct" in user

@@ -94,3 +94,16 @@ CREATE INDEX IF NOT EXISTS idx_kanban_heartbeat ON kanban(heartbeat_at);
 CREATE INDEX IF NOT EXISTS idx_learnings_reviewed ON shared_learnings(reviewed, adopted);
 CREATE INDEX IF NOT EXISTS idx_seed_source ON seed_context(source_stack_id);
 CREATE INDEX IF NOT EXISTS idx_changelog_ts ON system_change_log(timestamp);
+
+-- Events: what the CEO reports to Kent (task done/failed, escalated, resumed, project complete,
+-- halted). Written by the CEO only; Kent reads new rows every minute (read-only) and turns the
+-- important ones into notices for the operators. Structured fields only are shown to anyone:
+-- summary/detail are Gent-authored and treated as untrusted.
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    kind TEXT NOT NULL,                     -- task_done, task_failed, escalated, resumed, project_complete, halted
+    task_id TEXT,
+    summary TEXT NOT NULL,
+    detail TEXT                             -- JSON: files, verdict, retries
+);

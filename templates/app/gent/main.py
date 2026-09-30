@@ -5,10 +5,14 @@ Lifecycle:
   2. Loop: claim the next backlog task; decide whether it needs escalation (tasks.yaml
      `escalate: true` or the router's judgement); if so, publish an escalation_request
      for Kent and mark the task blocked until Kent's answer arrives in /inbox.
-  3. Run a one-task crew on the local "fast" tier; validate the result; retry once,
-     then escalate. Outputs go to /data/workspace/outputs/<task>.md.
+  3. Run a one-task crew on the local "fast" tier; validate the result; retry once
+     (told why the first attempt was rejected), then escalate. Final answers go to
+     /data/workspace/outputs/<task>.md; a task's named deliverable (tasks.yaml
+     `output:`) is saved from the final answer when the agent did not write it.
   4. When every task is done: write REPORT.md, publish transferable learnings to
      shared_learnings for Kent to review, and mark the project complete.
+  5. Throughout: record events (task done/failed, escalated, resumed, project complete,
+     halted) in stack.db `events`, which Kent reads every minute and reports to the operators.
 
 Everything the CEO does is visible in stack.db (kanban, shared_learnings) and in
 the container log. The CEO never talks to Kent directly: requests go out through
@@ -121,6 +125,33 @@ def claim(c: sqlite3.Connection):
     return row
 
 
+EVENTS_DDL = ("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, "
+              "kind TEXT NOT NULL, task_id TEXT, summary TEXT NOT NULL, detail TEXT)")
+
+
+def emit(c, kind: str, task_id: str | None, summary: str, **detail) -> None:
+    """Report to Kent (stack.db events; Kent reads new rows every minute)."""
+    c.execute("INSERT INTO events (ts, kind, task_id, summary, detail) VALUES (datetime('now'),?,?,?,?)",
+              (kind, task_id, summary[:500], json.dumps(detail)[:4000]))
+    c.commit()
+
+
+VERDICT_LINE = re.compile(r"overall\W{0,20}(PASS|FAIL)\b", re.I)
+
+
+def review_verdict(text: str) -> str | None:
+    """A review task's overall verdict (tasks.yaml `verdict: true`): the last "overall PASS|FAIL".
+    Only this one word goes to Kent, never the review's text."""
+    found = VERDICT_LINE.findall(text or "")
+    return found[-1].upper() if found else None
+
+
+def files_since(since: float) -> list[str]:
+    """Workspace files written since a time (not the CEO's own outputs/), for task reports."""
+    return sorted(str(p.relative_to(WORKSPACE)) for p in WORKSPACE.rglob("*")
+                  if p.is_file() and "outputs" not in p.relative_to(WORKSPACE).parts and p.stat().st_mtime >= since - 1)
+
+
 def set_status(c, task_id, status, **fields):
     sets = ", ".join(f"{k}=?" for k in fields)
     c.execute(f"UPDATE kanban SET status=?{', ' + sets if sets else ''}, heartbeat_at=datetime('now') WHERE task_id=?",
@@ -136,6 +167,7 @@ def escalate(c, task, question: str) -> None:
     c.commit()
     set_status(c, task["task_id"], "blocked", error_text=f"awaiting escalation #{cur.lastrowid}")
     log(f"task {task['task_id']} escalated to Kent (learning #{cur.lastrowid})")
+    emit(c, "escalated", task["task_id"], f"escalated to Kent (#{cur.lastrowid})", learning=cur.lastrowid)
 
 
 def resume_answered(c) -> None:
@@ -151,9 +183,51 @@ def resume_answered(c) -> None:
                       (json.dumps(spec), t["task_id"]))
             c.commit()
             log(f"task {t['task_id']} resumed with Kent's answer (via {ans.get('tier')})")
+            emit(c, "resumed", t["task_id"], f"resumed with Kent's answer (via {ans.get('tier')})")
 
 
 # --- Execution ----------------------------------------------------------------------
+MIN_ANSWER_CHARS = 200   # a shorter final answer ("file written") is not the deliverable itself
+
+
+def today() -> str:
+    """Today's date (UTC). The local model's training ends before it, so without this it takes
+    real recent dates for inventions (2026-09-30: the validator rejected a correct kernel
+    release date as "in the future" three times)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def output_path(spec: dict) -> Path | None:
+    """The task's named deliverable (tasks.yaml `output: paper.md`), inside the workspace only."""
+    name = str(spec.get("output") or "").strip()
+    if not name:
+        return None
+    p = (WORKSPACE / name.removeprefix("/data/workspace/")).resolve()
+    ws = WORKSPACE.resolve()
+    if p == ws or ws not in p.parents or "outputs" in p.relative_to(ws).parts:
+        raise ValueError(f"task output {name!r} must be a file inside /data/workspace (not outputs/)")
+    return p
+
+
+def strip_fence(text: str) -> str:
+    """A whole answer wrapped in one ```markdown fence is the document itself."""
+    m = re.fullmatch(r"\s*```[\w-]*\n(.*?)\n```\s*", text, re.S)
+    return m.group(1) if m else text.strip() + "\n"
+
+
+def save_deliverable(target: Path, output: str, started: float) -> bool:
+    """Small local models often put the deliverable in their final answer instead of calling
+    Write File (2026-09-30: research findings returned as text, task failed as "no file").
+    Save the answer as the named file unless the agent wrote that file during this task."""
+    if target.exists() and target.stat().st_mtime >= started - 1:
+        return False
+    if len(output.strip()) < MIN_ANSWER_CHARS:
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(strip_fence(output))
+    return True
+
+
 def previous_outputs(c) -> str:
     rows = c.execute("SELECT title, output_summary FROM kanban WHERE status='done' ORDER BY completed_at").fetchall()
     return "\n\n".join(f"### {r['title']}\n{(r['output_summary'] or '')[:1500]}" for r in rows)
@@ -188,9 +262,19 @@ def run_task(key: str, c, task) -> bool:
         if want:
             escalate(c, task, question or spec["description"])
             return True
+    target = output_path(spec)
     description = (f"Project: {project.get('name')} — {project.get('goal')}\n\n"
+                   f"Today's date (UTC): {today()}.\n\n"
                    f"Your task: {spec['description']}\n\n"
                    f"Work only inside /data/workspace. Save deliverables with the Write File tool.\n")
+    if target is not None:
+        description += (f"Save the deliverable as {target.relative_to(WORKSPACE.resolve())} with the Write File tool; "
+                        "if you cannot, give the complete deliverable as your final answer.\n")
+    critique = (task["error_text"] or "").removeprefix("validation failed:").strip() \
+        if (task["error_text"] or "").startswith("validation failed:") else ""
+    if critique:
+        # Without this the retry got the same instructions and repeated the same mistake.
+        description += f"\nYour previous attempt was rejected by the reviewer: {critique}\nFix exactly that.\n"
     if spec.get("expert_answer"):
         description += f"\nExpert guidance from Kent (follow it):\n{spec['expert_answer'][:6000]}\n"
     prior = previous_outputs(c)
@@ -201,20 +285,34 @@ def run_task(key: str, c, task) -> bool:
         with sqlite3.connect(DB_PATH, timeout=30) as hb:
             hb.execute("UPDATE kanban SET heartbeat_at=datetime('now') WHERE task_id=?", (task["task_id"],))
 
-    crew = build_crew(key, spec.get("agent", ""), description, spec.get("expected_output", ""), on_step=heartbeat)
+    crew = build_crew(key, spec.get("agent", ""), description, spec.get("expected_output", ""), on_step=heartbeat,
+                      max_tokens=spec.get("max_tokens"))
     started = time.time()
     result = crew.kickoff()
     output = getattr(result, "raw", str(result))
     (WORKSPACE / "outputs").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / "outputs" / f"{task['task_id']}.md").write_text(output)
+    if target is not None and save_deliverable(target, output, started):
+        log(f"task {task['task_id']}: saved the final answer as {target.relative_to(WORKSPACE.resolve())} "
+            "(the agent did not write it)")
+    guidance = (f"\n\nEXPERT GUIDANCE FROM KENT (trusted; the team was told to follow it):\n"
+                f"{spec['expert_answer'][:2000]}") if spec.get("expert_answer") else ""
     verdict = json_from(chat(key, "You review task results. Judge the FILES the task produced as well as the "
-                                  "agent's final answer. Reply JSON only: "
+                                  f"agent's final answer. Today's date (UTC) is {today()}: dates up to today are "
+                                  "not in the future. Reply JSON only: "
                                   '{"passed": true|false, "critique": "<one sentence>"}',
                              f"TASK:\n{spec['description'][:3000]}\n\nEXPECTED:\n{spec.get('expected_output', '')[:1000]}"
+                             f"{guidance}"
                              f"\n\nFINAL ANSWER:\n{output[:4000]}\n\n{workspace_evidence(started)}", 200), {})
     if verdict.get("passed", False):
         set_status(c, task["task_id"], "done", completed_at=datetime.now(timezone.utc).isoformat(), output_summary=output[:4000])
         log(f"task {task['task_id']} done")
+        extra = {}
+        if spec.get("verdict"):
+            src = target.read_text(errors="replace") if target is not None and target.exists() else output
+            extra["verdict"] = review_verdict(src)
+        emit(c, "task_done", task["task_id"], f"{task['task_id']} done", files=files_since(started),
+             retries=task["retry_count"], escalated="expert_answer" in spec, **extra)
         return True
     retries = task["retry_count"] + 1
     if retries > MAX_RETRIES:
@@ -227,6 +325,21 @@ def run_task(key: str, c, task) -> bool:
         c.commit()
         log(f"task {task['task_id']} failed validation; retry {retries}/{MAX_RETRIES}")
     return False
+
+
+def write_status(err: str | None, prev: dict) -> dict:
+    """/data/CEO_STATUS: a heartbeat of the supervisor loop and its last error, read by Kent's
+    stuck-Gent check (an error repeated every pass is invisible otherwise: only the log shows it)."""
+    now = time.time()
+    s = {"ts": now, "error": None, "error_since": None, "error_count": 0}
+    if err:
+        same = prev.get("error") == err
+        s.update(error=err[:500], error_since=prev["error_since"] if same else now,
+                 error_count=prev.get("error_count", 0) + 1 if same else 1)
+    tmp = DATA / ".CEO_STATUS.tmp"
+    tmp.write_text(json.dumps(s))
+    tmp.replace(DATA / "CEO_STATUS")
+    return s
 
 
 def finalize(key: str, c) -> None:
@@ -251,6 +364,16 @@ def finalize(key: str, c) -> None:
                        float(l.get("confidence", 0.5) or 0.5)))
     c.commit()
     (DATA / "STATE").write_text("complete\n")
+    review = None
+    for (d,) in c.execute("SELECT detail FROM events WHERE kind='task_done' ORDER BY id DESC"):
+        v = json.loads(d or "{}").get("verdict")
+        if v in ("PASS", "FAIL"):
+            review = v
+            break
+    emit(c, "project_complete", None, "project complete", review=review,
+         files=sorted(str(p.relative_to(WORKSPACE)) for p in WORKSPACE.rglob("*")
+                      if p.is_file() and "outputs" not in p.relative_to(WORKSPACE).parts),
+         learnings=len(learnings) if isinstance(learnings, list) else 0)
     log(f"project complete: REPORT.md written, {len(learnings) if isinstance(learnings, list) else 0} learning(s) published")
 
 
@@ -259,11 +382,19 @@ def main() -> int:
     key = KEY_PATH.read_text().strip()
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     c = db()
+    c.execute(EVENTS_DDL)   # stacks spawned before the events table existed
     seed(c)
     recover(c)
     log("CEO running")
+    status: dict = {}
+    err = None   # how the previous pass ended, recorded at the top of the next one
     while True:
+        try:
+            status = write_status(err, status)
+        except OSError as e:
+            log(f"cannot write CEO_STATUS: {e}")
         task = None
+        err = None
         try:
             resume_requested(c)
             resume_answered(c)
@@ -277,6 +408,7 @@ def main() -> int:
                     if not (DATA / "HALTED").exists():
                         (DATA / "HALTED").write_text(f"{failed} failed task(s)\n")
                         log(f"halted: {failed} failed task(s); waiting for operator resume")
+                        emit(c, "halted", None, f"halted: {failed} failed task(s)", failed=failed)
                     time.sleep(POLL)
                     continue
                 (DATA / "HALTED").unlink(missing_ok=True)
@@ -292,6 +424,7 @@ def main() -> int:
         except KeyboardInterrupt:
             return 0
         except Exception as e:  # noqa: BLE001 - keep the CEO alive; record the failure on the task
+            err = f"{type(e).__name__}: {e}"
             log(f"error: {e}")
             traceback.print_exc()
             if task is not None:
@@ -300,6 +433,8 @@ def main() -> int:
                 c.execute("UPDATE kanban SET status=?, retry_count=retry_count+1, error_text=? WHERE task_id=?",
                           (status, f"error: {e}"[:1000], task["task_id"]))
                 c.commit()
+                if status == "failed":
+                    emit(c, "task_failed", task["task_id"], f"{task['task_id']} failed", error=str(e)[:500])
             time.sleep(POLL)
 
 

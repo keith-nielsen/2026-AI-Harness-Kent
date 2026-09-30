@@ -7,7 +7,8 @@ Creates one isolated Gent:
   - system account gent-<id> (own uid/gid, no login, no home)
   - /var/lib/kent-gent/stacks/<id>/
         data/     gent-<id>:kent  2750  stack.db, project/, workspace/ (Kent reads, never writes)
-        inbox/    kent:gent-<id>  0750  Kent's answers (mounted read-only)
+        inbox/    kent:gent-<id>  2750  Kent's answers (mounted read-only; setgid, so the files Kent
+                                        writes get the Gent's group and the Gent can read them)
   - gateway key: /etc/kent/litellm/gent-keys/<id>.key (identity gent-<id>, local tiers only)
                  /var/lib/kent-gent/keys/<id>.key      (mounted read-only into the container)
   - private Gitea repo kent/gent-<id> (created with admin rights; Kent's token pushes to it)
@@ -188,7 +189,9 @@ def main() -> None:
     mkdir(data, 0o2750, uid, op_gid)
     for sub in ("project", "workspace"):
         mkdir(data / sub, 0o2750, uid, op_gid)
-    mkdir(stack / "inbox", 0o750, op_pw.pw_uid, gid)
+    # setgid: Kent (not in the Gent's group) writes the answers; without it they got group kent
+    # and the Gent could not read them (2026-09-30: "Permission denied: /inbox/escalation-1.json").
+    mkdir(stack / "inbox", 0o2750, op_pw.pw_uid, gid)
     for name, content in files.items():
         write(data / "project" / name, content, 0o640, uid, op_gid)
 

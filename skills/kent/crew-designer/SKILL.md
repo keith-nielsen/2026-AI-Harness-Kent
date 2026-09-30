@@ -84,8 +84,8 @@ Select the closest matching template from the table above. Then customise:
    and each task sees the results of the earlier ones. Put dependencies first.
 
 5. **Plan for the local model**: every Gent worker runs on the local `fast` tier; Gents
-   cannot use smart or frontier. Keep each task small and concrete (name the files to
-   write). Where a task needs expert judgement a small model is likely to get wrong
+   cannot use smart or frontier. Keep each task small and concrete, with one deliverable
+   named in `output:` (see "Spawning"). Where a task needs expert judgement a small model is likely to get wrong
    (licensing, security-critical choices, novel design), mark it `escalate: true` with a
    precise `question`: you (Kent) will answer it on frontier before the team starts.
 
@@ -210,7 +210,7 @@ name: "Short project name"
 goal: "One or two sentences: the deliverable and who uses it"
 ```
 
-`project.yaml` may add `limits: {max_iter: 6, max_tokens: 1500}` (defaults; keep tasks small — the local model is slow).
+`project.yaml` may add `limits: {max_iter: 6, max_tokens: 4000}` (the defaults; keep tasks small — the local model is slow).
 
 `agents.yaml` — one entry per worker (key -> role, goal, backstory). Keep it to 2-4 agents.
 
@@ -226,7 +226,31 @@ build:
   expected_output: "..."
   escalate: true                    # optional: ask Kent (frontier) before starting
   question: "The precise expert question"   # optional, used with escalate
+write:
+  agent: writer
+  description: "..."
+  expected_output: "..."
+  output: paper.md                  # the task's one deliverable, relative to /data/workspace
+  max_tokens: 6000                  # optional: longer replies for this task (cap 16000)
+review:
+  agent: reviewer
+  description: "Check each deliverable against its task. One line per file; last line: Overall: PASS or Overall: FAIL."
+  expected_output: "review.md ending with Overall: PASS or Overall: FAIL"
+  output: review.md
+  verdict: true                     # its overall PASS/FAIL is reported to Kent
 ```
+
+Rules that make tasks succeed on the local model:
+- **One deliverable per task, named in `output:`.** Small models often put the deliverable in
+  their final answer instead of calling Write File; with `output:` the Gent saves that answer
+  as the file, so the task does not fail on a missing file.
+- **Ask for terse content**: 2-3 sentences per finding or section item, not paragraphs; a long
+  answer is cut off at `max_tokens`.
+- **End with a review task marked `verdict: true`** whose deliverable's last line is `Overall: PASS`
+  or `Overall: FAIL`. The Gent reports that one word to Kent (never the review's text), and it
+  appears in the operator's notice next to Kent's own frontier review.
+- **Raise `max_tokens` only for writing tasks** whose deliverable is long (a ~1500-word paper
+  needs about 3000 tokens plus headroom: 6000).
 
 Then run: `kent-gent spawn --name "<name>" --project <dir>` and report the stack id.
 Follow progress with `kent-gent status <id>`; when it is complete run
