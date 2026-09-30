@@ -14,7 +14,7 @@
 #   sudo ./kent-admin llama set KEY=VALUE     local model server setting (MODEL_SET, CTX, UB, NCMOE,
 #                                             THINK, ALIAS, PIN, CORES, TUNE); operators then run
 #                                             `kent llama restart`
-#   sudo ./kent-admin models rehash           after adding or replacing a model file: re-apply
+#   sudo ./kent-admin models rehash           after replacing a selected model file: re-apply
 #                                             the profile's models mode and re-record SHA-256 hashes
 #   sudo ./kent-admin conformance             run the conformance suite
 #

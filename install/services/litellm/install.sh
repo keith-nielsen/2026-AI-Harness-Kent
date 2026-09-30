@@ -173,7 +173,9 @@ if [[ ! -x "${VENV}/bin/python" ]]; then
     run "$PYTHON" -m venv "$VENV"
 fi
 log "installing locked dependencies (--require-hashes)"
-run "${VENV}/bin/pip" install --quiet --no-deps --require-hashes \
+# Wheels come from the download cache when present; --require-hashes checks them either way.
+PIPCACHE=(--no-cache-dir); cache_enabled && PIPCACHE=(--cache-dir "$(cache_dir pip)")
+run "${VENV}/bin/pip" install --quiet --no-deps --require-hashes "${PIPCACHE[@]}" \
     -r "$HERE/requirements.lock"
 run install -d -m 0755 -o root -g root "${VENV}/libexec"
 run install -m 0755 -o root -g root "$HERE/kent-litellm-start" "${VENV}/libexec/kent-litellm-start"

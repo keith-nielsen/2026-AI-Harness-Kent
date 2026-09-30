@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Kent — install/services/grafana/install.sh
-# Configures the vendor grafana package (Grafana apt repo; account grafana)
-# without editing grafana.ini:
+# Configures the vendor grafana package (account grafana) without editing grafana.ini. A
+# pre-existing package is adopted; otherwise Kent installs the version pinned in ../versions.env
+# (GRAFANA_VERSION, from the SHA-256-checked .deb; no apt source is added) and removes it, with
+# its account and data, on uninstall:
 #   drop-in   /etc/systemd/system/grafana-server.service.d/kent.conf (127.0.0.1:3001)
 #   provision /etc/grafana/provisioning/{datasources,dashboards}/kent.yaml
 #   kent      /etc/kent/grafana/ (dashboards, root-only admin password)
-# Pre-existing /var/lib/grafana is moved aside and restored on uninstall; the
+# For a pre-existing package, /var/lib/grafana is moved aside and restored on uninstall; the
 # unit's prior enabled/active state is restored too.
 # Usage: sudo ./install.sh [--no-start] [--dry-run]
 # =============================================================================
@@ -15,6 +17,7 @@ SERVICE="grafana"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 KENT_ROOT="$(cd "$HERE/../../.." && pwd)"
 source "$HERE/../lib-service.sh"
+source "$HERE/../versions.env"
 
 UNIT=grafana-server.service; CONF=/etc/kent/grafana; PROV=/etc/grafana/provisioning
 DROPIN_DIR=/etc/systemd/system/grafana-server.service.d; PORT=3001; START=1
@@ -26,15 +29,28 @@ audit_event "install started (${INVOCATION_ARGS})"
 OPERATOR="$(operator_user)"; OPERATOR_HOME="$(getent passwd "$OPERATOR" | cut -d: -f6)"
 
 log "preflight"
-pkg_installed grafana || die "grafana package not installed (expected from the Grafana apt repo)"
 if ! port_free "$PORT" && ! systemctl is-active --quiet "$UNIT" 2>/dev/null; then die "port $PORT in use"; fi
-[[ -d "$PROV/datasources" && -d "$PROV/dashboards" ]] || die "vendor provisioning dirs missing under $PROV"
 
-record_unit_state "$UNIT"
+ADOPTED=0
+if pkg_installed grafana && ! manifest_has package grafana; then
+    ADOPTED=1
+    record_unit_state "$UNIT"          # pre-existing package: restore its state on uninstall
+else
+    ensure_pinned_deb grafana "$GRAFANA_VERSION" "$GRAFANA_DEB_URL" "$GRAFANA_DEB_SHA256"
+    if manifest_has package grafana; then
+        # Created by the package because Kent installed it: Kent removes them too.
+        manifest_add user grafana
+        manifest_add group grafana
+        manifest_add state /var/lib/grafana
+        manifest_add state /var/log/grafana
+    fi
+fi
+retire_grafana_repo
+need '[[ -d "$PROV/datasources" && -d "$PROV/dashboards" ]]' "vendor provisioning dirs missing under $PROV"
 run systemctl stop "$UNIT" || true
 
-# Fresh data directory; the pre-existing one is kept aside for uninstall.
-if ! grep -q "^moved /var/lib/grafana " "$(manifest_file)" 2>/dev/null; then
+# Adopted package: fresh data directory; the pre-existing one is kept aside for uninstall.
+if [[ "$ADOPTED" -eq 1 ]] && ! grep -q "^moved /var/lib/grafana " "$(manifest_file)" 2>/dev/null; then
     move_aside /var/lib/grafana
     run install -d -m 0755 -o grafana -g grafana /var/lib/grafana
 fi
@@ -62,7 +78,11 @@ run install -m 0600 -o "$OPERATOR" -g "$OPERATOR" "$CONF/credentials/admin_passw
 ensure_dir "$DROPIN_DIR" 0755 root root
 place_file dropin "$HERE/kent.conf" "$DROPIN_DIR/kent.conf" 0644 root root
 run systemctl daemon-reload
-if [[ "$START" -eq 1 ]]; then run systemctl enable "$UNIT"; run systemctl restart "$UNIT"; fi
+if [[ "$START" -eq 1 ]]; then
+    run systemctl enable "$UNIT"; run systemctl restart "$UNIT"
+    # Package installed by Kent → Kent's enablement is undone on uninstall.
+    manifest_has package grafana && manifest_add enabled "$UNIT"
+fi
 
 if [[ "$START" -eq 1 && "$DRY_RUN" -eq 0 ]]; then
     for _ in $(seq 1 60); do curl -sf -m 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null && break; sleep 2; done

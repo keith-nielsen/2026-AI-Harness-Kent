@@ -11,9 +11,13 @@
 # manifest (/var/lib/kent-install/manifest). Kent's data (its database, audit chain, Gent
 # archives, Gitea repositories, metrics and logs) is kept unless --purge. Files in operators'
 # home directories (~/.config/kent) are listed for the operator to delete, not removed by root.
+# The installer's download cache (/var/cache/kent-install: pinned binaries, .deb and Python
+# packages, reused by the next install) is also kept unless --purge. To reclaim its space
+# without purging: sudo rm -rf /var/cache/kent-install
 #
-#   --purge      also remove Kent's data; afterwards verify-clean.sh checks that no Kent
-#                component is left (only when every module succeeded and not with --dry-run)
+#   --purge      also remove Kent's data and the download cache (/var/cache/kent-install);
+#                afterwards verify-clean.sh checks that no Kent component is left (only when
+#                every module succeeded and not with --dry-run)
 #   --dry-run    print what would be done; changes nothing
 #   --log FILE   also write every module's full output to FILE (owned by the invoking user), with
 #                a header (repository commit, host, time) and each module's exit status
@@ -198,6 +202,12 @@ if [[ "$rc" -eq 0 && "$PURGE" -eq 1 && "$REAL" -eq 1 ]]; then
         logger -t kent-install -- "purged /var/lib/kent-install (all modules uninstalled)" 2>/dev/null || true
         echo "  removed /var/lib/kent-install"; logf "removed /var/lib/kent-install"
     fi
+    if [[ -d /var/cache/kent-install ]] && ! compgen -G "$MDIR/*" >/dev/null; then
+        size="$(du -sh /var/cache/kent-install 2>/dev/null | cut -f1)"
+        rm -rf --one-file-system /var/cache/kent-install
+        logger -t kent-install -- "purged the download cache /var/cache/kent-install" 2>/dev/null || true
+        echo "  removed the download cache /var/cache/kent-install (${size:-?})"; logf "removed /var/cache/kent-install"
+    fi
 fi
 # --purge: prove the result (only after every module succeeded, never on a dry run). Leftovers
 # make the exit status 4 (the uninstall itself completed).
@@ -211,6 +221,11 @@ logf "" "# finished $(date -Is), exit $rc"
 if [[ -n "$op" && -d "$(getent passwd "$op" | cut -d: -f6)/.config/kent" ]]; then
     echo ""
     echo "Your personal Kent credentials remain in ~$op/.config/kent (delete them when no longer needed)."
+fi
+if [[ "$REAL" -eq 1 && "$PURGE" -eq 0 && -d /var/cache/kent-install ]]; then
+    echo ""
+    echo "The download cache /var/cache/kent-install ($(du -sh /var/cache/kent-install 2>/dev/null | cut -f1)) is kept for the next install."
+    echo "To reclaim the space: sudo rm -rf /var/cache/kent-install   (or uninstall with --purge)"
 fi
 [[ -z "$LOG" ]] || echo "Full log: $LOG$( [[ "$TRACE" -eq 1 ]] && echo " (trace: $LOG.trace)")"
 exit "$rc"

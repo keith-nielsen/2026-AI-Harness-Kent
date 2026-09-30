@@ -10,7 +10,8 @@
 #   LEFTOVER      a Kent component still present                 -> exit 1
 #   WARN          a Kent port in use (something listens; may not be Kent)
 #   INFO          worth knowing, not a leftover (something on 8080, the local-model port; the
-#                 operator's own ~/.config/kent, which uninstall leaves for them to delete)
+#                 operator's own ~/.config/kent, which uninstall leaves for them to delete; the
+#                 download cache /var/cache/kent-install, kept by a plain uninstall)
 #   NOT CHECKED   could not be inspected (usually needs root, or a tool is missing)
 # Exit: 0 = no Kent components found, 1 = leftovers found, 2 = usage error.
 #
@@ -84,8 +85,15 @@ for p in "$R"/etc/kent "$R"/opt/kent-* "$R"/var/lib/kent "$R"/var/lib/kent-* "$R
          "$R"/var/log/kent-* "$R"/srv/kent "$R"/usr/local/bin/kent "$R"/etc/sudoers.d/9[0-9]-kent-* \
          "$R"/var/lib/systemd/timers/stamp-kent-* "$R$OPHOME"/.local/share/systemd/timers/stamp-kent-* \
          "$R"/var/lib/systemd/linger/kent; do
+    [[ "$p" == "$R/var/cache/kent-install" ]] && continue   # the download cache: see below
     [[ -e "$p" || -L "$p" ]] && found path "${p#"$R"}"
 done
+# The installer's download cache survives a plain uninstall on purpose (--purge removes it).
+if [[ -d "$R/var/cache/kent-install" ]]; then
+    sz="size needs root"; [[ -r "$R/var/cache/kent-install" && -x "$R/var/cache/kent-install" ]] \
+        && sz="$(du -sh "$R/var/cache/kent-install" 2>/dev/null | cut -f1)"
+    info path "/var/cache/kent-install: download cache for reinstalls ($sz); reclaim: sudo rm -rf /var/cache/kent-install"
+fi
 # The operator's own credentials: uninstall removes the files it placed there and deliberately
 # leaves the rest for the operator to delete, so this is information, not a leftover.
 if [[ -e "$R$OPHOME/.config/kent" ]]; then

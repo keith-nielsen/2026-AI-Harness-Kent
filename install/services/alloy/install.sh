@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Kent — install/services/alloy/install.sh
-# Grafana Alloy from the Grafana apt repository (vendor package; its postinst
-# creates the alloy account and adds it to systemd-journal/adm). Kent adds:
+# Grafana Alloy, the vendor package pinned in ../versions.env (ALLOY_VERSION, installed from the
+# SHA-256-checked .deb; no apt source is added). Its postinst creates the alloy account and adds
+# it to systemd-journal/adm. Kent adds:
 #   config  /etc/kent/alloy/config.alloy (journald -> local Loki)
 #   drop-in /etc/systemd/system/alloy.service.d/kent.conf (ExecStart + hardening)
 # Vendor files (/etc/alloy, /etc/default/alloy) are never edited.
@@ -19,6 +20,7 @@ SERVICE="alloy"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 KENT_ROOT="$(cd "$HERE/../../.." && pwd)"
 source "$HERE/../lib-service.sh"
+source "$HERE/../versions.env"
 
 CONF=/etc/kent/alloy; UNIT=alloy.service; DROPIN_DIR=/etc/systemd/system/alloy.service.d; START=1; LIVE_DEBUG=0
 while [[ $# -gt 0 ]]; do
@@ -28,16 +30,13 @@ export DRY_RUN; require_root
 audit_event "install started (${INVOCATION_ARGS})"
 
 log "preflight"
-grep -rqs "apt.grafana.com" /etc/apt/sources.list.d/ || die "Grafana apt repository not configured (/etc/apt/sources.list.d/grafana.list)"
 if ! port_free 12345 && ! systemctl is-active --quiet "$UNIT" 2>/dev/null; then die "port 12345 in use"; fi
 curl -sf -m 3 http://127.0.0.1:3100/ready >/dev/null || warn "Loki not answering on 127.0.0.1:3100; logs will queue until it is"
 
 if pkg_installed alloy && ! manifest_has package alloy; then
     record_unit_state "$UNIT"          # pre-existing package: restore its state on uninstall
 else
-    run apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/grafana.list \
-        -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 -qq
-    ensure_package alloy
+    ensure_pinned_deb alloy "$ALLOY_VERSION" "$ALLOY_DEB_URL" "$ALLOY_DEB_SHA256"
     if manifest_has package alloy; then
         # Created by the package because Kent installed it: Kent removes them too.
         manifest_add user alloy
@@ -45,6 +44,7 @@ else
         manifest_add state /var/lib/alloy
     fi
 fi
+retire_grafana_repo
 
 claim_path path "$CONF"
 ensure_dir "$CONF" 0750 root alloy

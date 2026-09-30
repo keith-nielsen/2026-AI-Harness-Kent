@@ -40,6 +40,9 @@ log()  { echo "[$(date '+%H:%M:%S')] ${SERVICE:-kent}: $*"; }
 audit_event() { [[ "${DRY_RUN:-0}" -eq 1 ]] || logger -t kent-install -- "${SERVICE:-kent}: $*" 2>/dev/null || true; }
 warn() { log "WARN: $*" >&2; }
 die()  { log "ERROR: $*" >&2; exit 1; }
+# Announce a slow step before it starts: install.sh prints NOTE lines in full on their own line
+# (above its progress line), so the expectation is never cut off or wrapped.
+long_step() { log "NOTE: $*"; }   # long_step <what> — <how long>
 
 # Run a privileged action, or print it under --dry-run.
 run() {
@@ -156,23 +159,56 @@ place_file() {  # place_file <kind> <src> <dest> <mode> <owner> <group>
     run install -m "$mode" -o "$owner" -g "$group" "$src" "$dest"
 }
 
-# --- Verified downloads -----------------------------------------------------
+# --- Verified downloads (and the download cache) --------------------------
+# Every pinned download is kept in KENT_CACHE, so reinstalls do not fetch it again. A cached
+# file is checked against the same pinned SHA-256 as a fresh download, so the cache changes
+# nothing about what gets installed. The cache belongs to the installer, not to a module: a plain
+# uninstall keeps it, `uninstall.sh --purge` removes it, and it can be deleted at any time to
+# reclaim space (sudo rm -rf /var/cache/kent-install). KENT_NO_CACHE=1 (install.sh --no-cache)
+# neither reads nor writes it.
+KENT_CACHE="${KENT_CACHE:-/var/cache/kent-install}"
+cache_enabled() { [[ "${KENT_NO_CACHE:-0}" != 1 && "$DRY_RUN" -eq 0 ]]; }
+cache_dir() {  # cache_dir <sub>  -> prints the directory (created root-only on first use)
+    install -d -m 0700 "$KENT_CACHE" "$KENT_CACHE/$1"   # root-owned when run as root (installers are)
+    echo "$KENT_CACHE/$1"
+}
+
 # Download to a temp file and verify against the pinned SHA-256 from versions.env.
 fetch_verified() {  # fetch_verified <url> <sha256> <dest>
-    local url="$1" sha="$2" dest="$3"
+    local url="$1" sha="$2" dest="$3" cached=""
     if [[ "$DRY_RUN" -eq 1 ]]; then
-        echo "  [dry-run] download $url -> $dest (verify sha256 ${sha:0:16}…)"
+        if [[ "${KENT_NO_CACHE:-0}" != 1 && -f "$KENT_CACHE/downloads/${sha}-$(basename "$url")" ]]; then
+            echo "  [dry-run] use cached $(basename "$url") -> $dest (verify sha256 ${sha:0:16}…)"
+        else echo "  [dry-run] download $url -> $dest (verify sha256 ${sha:0:16}…)"; fi
         return 0
     fi
+    cache_enabled && cached="$(cache_dir downloads)/${sha}-$(basename "$url")"
+    if [[ -n "$cached" && -f "$cached" ]]; then
+        if [[ "$(sha256sum "$cached" | cut -d' ' -f1)" == "$sha" ]]; then
+            install -m 0644 "$cached" "$dest"
+            log "verified $(basename "$url") from the download cache (sha256 ${sha:0:16}…)"
+            return 0
+        fi
+        warn "cached $(basename "$url") does not match its pinned SHA-256; removing it and downloading again"
+        rm -f "$cached"
+    fi
     local tmp; tmp="$(mktemp)"
+    long_step "downloading $(basename "$url")$(size_hint "$url") — depends on the connection"
     curl -fsSL --retry 3 -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed: $url"; }
     local got; got="$(sha256sum "$tmp" | cut -d' ' -f1)"
     if [[ "$got" != "$sha" ]]; then
         rm -f "$tmp"
         die "SHA-256 mismatch for $url (expected $sha, got $got); refusing to install"
     fi
+    [[ -z "$cached" ]] || install -m 0644 "$tmp" "$cached"
     mv "$tmp" "$dest"
     log "verified $(basename "$url") (sha256 ${sha:0:16}…)"
+}
+# " (123 MB)" from the server's Content-Length, or nothing; only sets expectations.
+size_hint() {
+    local n; n="$(curl -sfIL -m 5 "$1" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print n }')"
+    [[ "$n" =~ ^[0-9]+$ && "$n" -gt 0 ]] && echo " ($(( n / 1000000 )) MB)"
+    return 0
 }
 
 # --- Packages ---------------------------------------------------------------
@@ -189,6 +225,44 @@ ensure_package() {  # ensure_package <name>
     fi
     run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$name"
     manifest_add package "$name"
+}
+
+# Dependency on an earlier module: fatal normally; under --dry-run the earlier module changed
+# nothing, so the check can only warn (install.sh --dry-run runs every module in sequence).
+need() {  # need <condition> <message>
+    eval "$1" && return 0
+    [[ "$DRY_RUN" -eq 1 ]] && { warn "dry run: $2 (expected: the earlier module was only simulated)"; return 0; }
+    die "$2"
+}
+
+# A vendor .deb pinned in versions.env: fetched (or taken from the download cache), checked against
+# its pinned SHA-256 and installed from the file, so no apt source is needed and system updates
+# cannot move it. A package Kent installed earlier is moved to the pinned version (up or down).
+ensure_pinned_deb() {  # ensure_pinned_deb <package> <version> <url> <sha256>
+    local name="$1" ver="$2" url="$3" sha="$4" have
+    have="$(dpkg-query -W -f='${Version}' "$name" 2>/dev/null || true)"
+    if pkg_installed "$name" && [[ "$have" == "$ver" ]]; then
+        log "package $name $ver present (pinned version)"; return 0
+    fi
+    local d; d="$(mktemp -d)"; chmod 0755 "$d"     # readable by apt's _apt user
+    fetch_verified "$url" "$sha" "$d/$(basename "$url")"
+    [[ "$DRY_RUN" -eq 1 ]] || chmod 0644 "$d/$(basename "$url")"
+    log "installing $name $ver${have:+ (replacing $have)}"
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --allow-downgrades \
+        "$d/$(basename "$url")"
+    rm -rf "$d"
+    manifest_add package "$name"
+}
+
+# Installs before the pins (2026-09-29) added the Grafana apt repository; with pinned packages Kent
+# no longer needs it. Removes it only where Kent's manifest says Kent added it.
+GRAFANA_APT_LIST=/etc/apt/sources.list.d/grafana.list
+GRAFANA_APT_KEY=/etc/apt/keyrings/grafana.asc
+retire_grafana_repo() {
+    manifest_has file "$GRAFANA_APT_LIST" || return 0
+    retire_file "$GRAFANA_APT_LIST"; retire_file "$GRAFANA_APT_KEY"
+    [[ "$DRY_RUN" -eq 1 ]] || rm -f /var/lib/apt/lists/apt.grafana.com_*
+    log "removed the Grafana apt repository Kent had added (packages are pinned now)"
 }
 
 # Record a pre-existing unit's enablement/activity once, so uninstall can put

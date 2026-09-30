@@ -121,7 +121,7 @@ apply_models_mode() {  # apply_models_mode <mode> [previous]
     fi
     case "$mode" in
         lab)
-            [[ "$prev" == hardened ]] && restore_models_hardened
+            [[ "$prev" == hardened ]] && restore_models_hardened ""
             secure_models_lab ;;
         hardened) secure_models_hardened ;;
         *) die "unknown models mode '$mode'" ;;

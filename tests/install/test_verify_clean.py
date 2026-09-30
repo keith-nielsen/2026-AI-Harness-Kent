@@ -139,3 +139,12 @@ def test_operator_config_is_info_not_a_leftover(tmp_path):
     r = run(root)
     assert r.returncode == 0, r.stdout
     assert any(l.startswith("INFO") and ".config/kent" in l for l in r.stdout.splitlines()), r.stdout
+
+
+def test_download_cache_is_information_not_a_leftover(tmp_path):
+    root = clean_root(tmp_path)
+    (root / "var/cache/kent-install/downloads").mkdir(parents=True)
+    r = run(root)
+    assert r.returncode == 0, r.stdout
+    assert "LEFTOVER" not in r.stdout
+    assert "INFO" in r.stdout and "sudo rm -rf /var/cache/kent-install" in r.stdout

@@ -210,3 +210,105 @@ def test_uninstall_of_a_missing_unit_does_not_abort(tmp_path):
     unit = tmp_path / "kent-nonexistent-xyz.service"
     r = sh_env(tmp_path, "uninstall_module", dict(os.environ), f"unit {unit}\n")
     assert r.returncode == 0 and f"rm -f {unit}" in r.stdout
+
+
+# --- Download cache (fetch_verified) and pinned .deb packages --------------------------------
+def fetch(tmp_path, src: Path, sha: str, *, cache: Path, extra_env: dict | None = None, dry: bool = False):
+    """Run fetch_verified for a file:// URL outside dry-run (curl reads the local file)."""
+    mdir = tmp_path / "manifest"; mdir.mkdir(exist_ok=True); (mdir / "t").write_text("")
+    env = {k: v for k, v in os.environ.items() if k != "KENT_NO_CACHE"}
+    env |= {"KENT_MANIFEST_DIR": str(mdir), "DRY_RUN": "1" if dry else "0", "SERVICE": "t",
+            "KENT_CACHE": str(cache), **(extra_env or {})}
+    dest = tmp_path / "out.bin"
+    r = subprocess.run(["bash", "-c", f"source {LIB}; SERVICE=t; fetch_verified file://{src} {sha} {dest}"],
+                       env=env, capture_output=True, text=True)
+    return r, dest
+
+
+@pytest.fixture
+def artifact(tmp_path):
+    import hashlib
+    src = tmp_path / "pkg-1.0.tgz"; src.write_bytes(b"pinned artifact\n")
+    return src, hashlib.sha256(src.read_bytes()).hexdigest()
+
+
+def test_fetch_stores_a_verified_download_in_the_cache(tmp_path, artifact):
+    src, sha = artifact
+    r, dest = fetch(tmp_path, src, sha, cache=tmp_path / "cache")
+    assert r.returncode == 0, r.stderr
+    assert dest.read_bytes() == src.read_bytes()
+    assert (tmp_path / "cache/downloads" / f"{sha}-{src.name}").read_bytes() == src.read_bytes()
+
+
+def test_fetch_uses_the_cache_without_the_network(tmp_path, artifact):
+    src, sha = artifact
+    fetch(tmp_path, src, sha, cache=tmp_path / "cache")
+    data = src.read_bytes(); src.unlink()                  # "offline": the URL no longer resolves
+    r, dest = fetch(tmp_path, src, sha, cache=tmp_path / "cache")
+    assert r.returncode == 0, r.stderr
+    assert "from the download cache" in r.stdout and dest.read_bytes() == data
+
+
+def test_fetch_replaces_a_cached_file_that_fails_its_hash(tmp_path, artifact):
+    src, sha = artifact
+    cached = tmp_path / "cache/downloads" / f"{sha}-{src.name}"
+    cached.parent.mkdir(parents=True); cached.write_bytes(b"tampered\n")
+    r, dest = fetch(tmp_path, src, sha, cache=tmp_path / "cache")
+    assert r.returncode == 0, r.stderr
+    assert "does not match its pinned SHA-256" in r.stderr
+    assert dest.read_bytes() == src.read_bytes() and cached.read_bytes() == src.read_bytes()
+
+
+def test_fetch_refuses_a_download_that_fails_its_hash_and_caches_nothing(tmp_path, artifact):
+    src, _ = artifact
+    r, dest = fetch(tmp_path, src, "0" * 64, cache=tmp_path / "cache")
+    assert r.returncode != 0 and "SHA-256 mismatch" in r.stderr
+    assert not dest.exists() and not list((tmp_path / "cache").rglob("*.tgz"))
+
+
+def test_no_cache_neither_reads_nor_writes_the_cache(tmp_path, artifact):
+    src, sha = artifact
+    cached = tmp_path / "cache/downloads" / f"{sha}-{src.name}"
+    cached.parent.mkdir(parents=True); cached.write_bytes(src.read_bytes())
+    src.unlink()                                           # a cache read would succeed; a download fails
+    r, _ = fetch(tmp_path, src, sha, cache=tmp_path / "cache", extra_env={"KENT_NO_CACHE": "1"})
+    assert r.returncode != 0 and "download failed" in r.stderr
+    src.write_bytes(cached.read_bytes()); cached.unlink()
+    r, _ = fetch(tmp_path, src, sha, cache=tmp_path / "cache", extra_env={"KENT_NO_CACHE": "1"})
+    assert r.returncode == 0 and not cached.exists()
+
+
+def test_dry_run_says_whether_the_cache_would_be_used(tmp_path, artifact):
+    src, sha = artifact
+    r, _ = fetch(tmp_path, src, sha, cache=tmp_path / "cache", dry=True)
+    assert "[dry-run] download" in r.stdout and not (tmp_path / "cache").exists()
+    fetch(tmp_path, src, sha, cache=tmp_path / "cache")
+    r, _ = fetch(tmp_path, src, sha, cache=tmp_path / "cache", dry=True)
+    assert "[dry-run] use cached" in r.stdout
+
+
+def test_pinned_deb_is_installed_from_the_verified_file_and_recorded(tmp_path):
+    r = sh(tmp_path, "ensure_pinned_deb kent-nonexistent-pkg 1.2.3 https://example.invalid/p_1.2.3.deb "
+                     + "a" * 64)
+    assert r.returncode == 0, r.stderr
+    assert "download https://example.invalid/p_1.2.3.deb" in r.stdout
+    assert "apt-get install -y --no-install-recommends --allow-downgrades" in r.stdout and "p_1.2.3.deb" in r.stdout
+    assert "manifest += package kent-nonexistent-pkg" in r.stdout
+
+
+def test_retire_grafana_repo_only_touches_a_repo_kent_added(tmp_path):
+    assert "Grafana apt repository" not in sh(tmp_path, "retire_grafana_repo").stdout
+    r = sh(tmp_path, "retire_grafana_repo", "file /etc/apt/sources.list.d/grafana.list\nfile /etc/apt/keyrings/grafana.asc\n")
+    assert "rm -f /etc/apt/sources.list.d/grafana.list" in r.stdout and "rm -f /etc/apt/keyrings/grafana.asc" in r.stdout
+
+
+def test_modules_install_grafana_and_alloy_from_pins_not_an_apt_source():
+    svc = LIB.parent
+    for mod, var in (("grafana", "GRAFANA"), ("alloy", "ALLOY")):
+        text = (svc / mod / "install.sh").read_text()
+        assert f'ensure_pinned_deb {mod} "${var}_VERSION"' in text
+        assert "ensure_package " + mod not in text and "sources.list.d" not in text
+    env = (svc / "versions.env").read_text()
+    for key in ("GRAFANA_VERSION", "GRAFANA_DEB_URL", "GRAFANA_DEB_SHA256", "ALLOY_VERSION", "ALLOY_DEB_URL",
+                "ALLOY_DEB_SHA256"):
+        assert f"\n{key}=" in env

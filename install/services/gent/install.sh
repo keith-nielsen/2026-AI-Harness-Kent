@@ -47,11 +47,11 @@ audit_event "install started (${INVOCATION_ARGS})"
 
 log "preflight"
 systemctl is-active --quiet docker || die "docker is not running"
-getent passwd kent >/dev/null || die "hermes module not installed (kent account missing)"
-getent group litellm >/dev/null || die "litellm module not installed (group litellm missing)"
-[[ -d /etc/kent/litellm ]] || die "litellm module not installed"
-[[ -s /etc/kent/gitea/credentials/admin_password ]] || die "gitea module not installed"
-[[ -f /etc/systemd/system/kent-searxng.service ]] || die "searxng module not installed"
+need 'getent passwd kent >/dev/null' "hermes module not installed (kent account missing)"
+need 'getent group litellm >/dev/null' "litellm module not installed (group litellm missing)"
+need '[[ -d /etc/kent/litellm ]]' "litellm module not installed"
+need '[[ -s /etc/kent/gitea/credentials/admin_password ]]' "gitea module not installed"
+need '[[ -f /etc/systemd/system/kent-searxng.service ]]' "searxng module not installed"
 [[ -x /usr/sbin/squid ]] || ensure_package squid
 [[ -x /usr/lib/systemd/systemd-socket-proxyd ]] || die "systemd-socket-proxyd missing"
 # Only the loopback listener matters (the bridge socket on 172.30.0.1:3129 is ours).
@@ -63,8 +63,9 @@ ensure_service_account kent-squid /var/lib/kent-squid "Kent Gent egress proxy"
 claim_path path "$SQUID_CONF"
 ensure_dir "$SQUID_CONF" 0750 root kent-squid
 place_file file "$KENT_ROOT/configs/kent-squid.conf" "$SQUID_CONF/squid.conf" 0640 root kent-squid
-[[ "$DRY_RUN" -eq 1 ]] || /usr/sbin/squid -k parse -f "$SQUID_CONF/squid.conf" 2>&1 | grep -qE "FATAL|ERROR" \
-    && die "squid rejected $SQUID_CONF/squid.conf" || true
+if [[ "$DRY_RUN" -eq 0 ]] && /usr/sbin/squid -k parse -f "$SQUID_CONF/squid.conf" 2>&1 | grep -qE "FATAL|ERROR"; then
+    die "squid rejected $SQUID_CONF/squid.conf"
+fi
 manifest_add state /var/lib/kent-squid
 manifest_add state /var/log/kent-squid
 
@@ -113,7 +114,7 @@ if ! docker image inspect "$BASE" >/dev/null 2>&1; then
     run docker pull -q "$BASE" >/dev/null
     manifest_add dockerbase "$BASE"          # pulled by Kent → removed on uninstall
 fi
-log "building image $IMAGE:$TAG"
+long_step "building image $IMAGE:$TAG — a few minutes when the image changed, seconds otherwise"
 if [[ "$DRY_RUN" -eq 1 ]]; then
     run docker build -q --label kent.module=gent -t "$IMAGE:$TAG" -t "$IMAGE:current" "$WORK/ctx"
 elif ! docker build --progress=plain --label kent.module=gent -t "$IMAGE:$TAG" -t "$IMAGE:current" "$WORK/ctx" \
