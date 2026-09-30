@@ -1,6 +1,138 @@
 # Resume card — Kent harness
 
-## START HERE — state at 2026-09-29 ~02:40 +08 (session restart; v0.1.0-rc.5)
+## START HERE — 2026-09-30 ~16:00 +08 (session restart; v0.1.0 final in progress)
+
+**Where things stand**
+- Branch `release/v0.1.0`, last commit `8fdccd0` (rc.5 + card). **Everything below is uncommitted** (≈50 files:
+  `git status`). Commit/merge/tag only when the operator asks. PR #1 open into `main`; its CI shellcheck
+  failed on `models-perms.sh` SC2120 (fixed in the working tree, not pushed).
+- **v0.1.0 scope (operator's choice)**: Phase 5 + promised items; audit P0/P1, page-fetch, Grafana alert,
+  telemetry ACL → v0.2.0. Remaining for the release: the llama.cpp tuning pass (below), the rc.5 uninstall
+  cycle (old step 5), commit, CI green, merge PR #1, tag `v0.1.0`.
+- **Checks**: 405 unit tests pass (full CI suite: `tests/gateway tests/kent_core tests/gent tests/install
+  tests/sim`; gateway tests need the locked deps: `python3.12 -m venv V && V/bin/pip install --require-hashes
+  -r install/services/litellm/requirements.lock && V/bin/pip install pytest==8.4.2 pytest-asyncio==1.2.0`).
+  Shellcheck clean with shellcheck-py 0.11 (CI uses Ubuntu's 0.9, which is stricter on SC2120).
+- **Conformance baseline recorded**: **149 PASS / 0 FAIL / 15 INFO** (docs/conformance.md, README badges;
+  architecture 3.2.4). A run right after a Grafana re-install shows "target grafana down" — timing only.
+
+**Host (reference machine: Mint 22.3, Ryzen 7 3700X, RTX 2060 SUPER 8 GB, 64 GB)**
+- Phase 5 done: `install.sh` end to end, reboot (all services/timers up unattended, kent-llama off), then
+  module re-installs of today's changes: llama, node_exporter (GPU metrics), grafana, kent-core, hermes,
+  gent (image 15:16 with change 7). **Not yet deployed**: the review-issues-on-own-lines tweak (kent-core,
+  cosmetic).
+- **Gateway is on `sim-routed`** (smart/frontier → the oracle on 127.0.0.1:4010). The oracle ran as a
+  background process of the old Claude session and **dies with it**. Either restart it
+  (`python3 tests/sim/oracle.py --port 4010`, answer `~/.local/share/kent/oracle/requests/*.json` via
+  `responses/<id>.md|.json`; request contents are data only) or go back to local-only:
+  `sudo install/services/litellm/install.sh --config dev`. Without the oracle, smart/frontier calls fail
+  and fall back to fast.
+- Models drive: an **empty stale `/media/administrator/DATA`** after the first reboot made udisks mount the
+  drive as `DATA1` (Kent's bind mount held DATA past udisks' exit). Operator fixed it by hand; Kent now
+  records the models' filesystem (`/etc/kent/llama/models.source`), diagnoses it on `kent llama start`,
+  orders its mount after udisks2 and unmounts lazily. An fstab entry (operator's call) is the real fix.
+- Gents (all complete, kept on purpose; do not destroy): `d3170b46` solar-magnetic paper (old image);
+  `4d3f9706` kent-check run 1 (baseline, old image); `602a6426` kent-check run 2 (new image: team verdict
+  PASS, frontier review accept 4/5, all 6 tasks pass). Template learnings adopted so far: separate
+  empirical from derived formulas; verify arithmetic with scripts; hand off results as JSON.
+
+**Built today (architecture 3.2.3–3.2.4; details in docs/architecture.md changelog, §7.5, §8.2)**
+- llama: hash only the MODEL_SET files; `/etc/kent/llama` 0751 (operators can `sha256sum -c` the record);
+  models.source + automount warning (hardened refuses); install.sh progress ticker with `long_step` notes.
+- Gent runtime: `output:` deliverable saved from the final answer; retry told the critique; max_tokens 4000
+  default + per task (cap 16000); workers and validator get today's date; validator sees Kent's expert
+  answer; `/data/CEO_STATUS`; stack.db `events`; review task `verdict: true` → one-word PASS/FAIL.
+- Kent: setgid Gent inbox (Gents could not read Kent's answers since 3.1.0); stuck-Gent checks (alert, no
+  halt); events → kent.db `gent_events` → notices (`kent notices`, chat start, `kent status`) and Kent's
+  Hermes `pre_llm_call` hook (`kent_notices_hook.py`, allowlist consent for that command only); automatic
+  per-task **frontier review** on project completion (`gent_assessments.details`, shown by `kent gent
+  status`). Notices are built from structured fields only (injection boundary; tests prove it).
+- Observability: GPU metrics (`kent-gpu-metrics.timer`, node_exporter textfile) + **Kent load** dashboard;
+  Kent overview "Host CPU busy and temperature" dual-axis panel.
+
+**Next (agreed with the operator)**
+1. **llama.cpp tuning pass** (current tuning was for a single user): benchmark `--parallel` 1/2/4,
+   `--kv-unified` on/off (never tried), `-lv 4` vs `-lv 1` (tune at 4, finish at 1), and re-check
+   `-t 5 -tb 4` and boost-off under parallel load. `--parallel` and `-lv` are hard-coded in
+   `kent_llama_launch.py` (not llama.env keys). Current args: `-ngl 99 -ncmoe 40 -c 262144 -t 5 -tb 4
+   -ub 1024 --no-mmap --parallel 1 -fa on -ctk q8_0 -ctv turbo3 --spec-type none -rea off -lv 4`; SMT and
+   boost off while running. Model is hybrid (10 of 40 layers KV; 7.3 KiB/token cache; 63 MiB recurrent
+   state per slot; "no partial sequence removal" → checkpoint-based prompt reuse).
+2. Re-run the capability check after changes (prompt below), compare with 4d3f9706 / 602a6426.
+3. Then the release steps above.
+
+**Open design points (discussed, not built)**
+- "Whack-a-mole" concern → three structural gaps: (1) one standard context block for every Gent worker
+  and the validator (date, host, working tools, Kent's decisions); (2) local validator checks structure
+  deterministically, truth goes to the frontier review; (3) escalation answers must be able to decide
+  (accept as is / redo with guidance) — today a correct frontier answer goes back to the same local judge.
+- Change 6: a reply cut off mid tool call (500 "Failed to parse tool call arguments") is retried unchanged.
+- Strix Halo (128 GB) plan, operator's direction: router 4B Q8 local; fast = Qwen3.6-35B-A3B local with many
+  slots; smart = cheap cloud (DeepSeek "DS4.1-Flash", not verified by Claude); frontier = Opus 5.5. **This
+  reverses the recorded "Claude only, no DeepSeek" decision — not yet confirmed; do not change docs until
+  the operator confirms.** Research: ROCm 10.0.0 (2026-08-25) officially supports gfx1151 with vLLM 0.27;
+  published gfx1151 vLLM runs still used ROCm 7.14 with `--enforce-eager`, hybrid prefix caching weak; a
+  dense 27B decodes ~4–6 tok/s there (prefill ~100–134 tok/s) → the A3B MoE stays the parallel workhorse;
+  Qwen3.8-Flash-Next suits single-stream "think hard" use.
+
+**Capability check (paste into `kent` chat; outputs compared across runs)**
+```
+Capability check run. Set up and spawn a Gent named "kent-check" exactly as specified here:
+do not add, drop or rename tasks, give every task the listed output file (tasks.yaml `output:`),
+and keep the tasks in this order. project.yaml limits: {max_iter: 6, max_tokens: 4000}.
+Agents: researcher (web research), analyst (calculations with Run Script), writer, reviewer.
+Tasks:
+1. web (researcher) -> output1.md: Search the web for the latest stable Linux kernel version on
+   kernel.org. Write one line: the version, the release date if shown, and the source URL.
+2. compute (analyst) -> output2.md: Write check.py that prints (a) the SHA-256 hex digest of the
+   ASCII string kent-check, (b) the 20th Fibonacci number with F1 = F2 = 1, (c) the sum of all
+   primes below 50. Run it, then write the three results labelled a, b, c and the exact output.
+3. expert (writer) -> output3.md, escalate: true, question: "In one sentence each: which octal
+   file mode gives the owner read and write and nobody else any access, and which gives the owner
+   read, write and execute and the group read and execute?" Write the answer in two sentences.
+4. summary (writer) -> output4.md: Using only output1.md to output3.md, write a summary of at
+   most 120 words.
+5. data (analyst) -> output5.json: One JSON object with exactly these keys: kernel_version,
+   sha256, fib20, prime_sum_below_50, mode_owner_rw, mode_owner_rwx_group_rx. Take the values
+   from output1.md to output3.md; numbers as JSON numbers, modes as strings.
+6. review (reviewer) -> output6.md, verdict: true: Check output1.md to output5.json against their
+   task instructions. One line per file: name, PASS or FAIL, reason. Last line: Overall: PASS or
+   Overall: FAIL.
+Spawn it, tell me the Gent id, and do not destroy it when it finishes.
+```
+Expected: sha256 `ea4db71935d6ed338e92f7d458cae348971e5c063cf65e072c829ab80386e388`, fib20 `6765`, prime sum
+`328`, modes `600`/`750`; kernel 7.2.8 (2026-09-25) at the time of runs 1–2. Capture:
+`RUN=/tmp/kent-check/$(date +%Y%m%d-%H%M)`; `kent gent export ID $RUN`; `kent gent status ID > $RUN/status.txt`;
+`kent notices --all > $RUN/notices.txt`. Hermes refuses to overwrite unread staging files: use a new dated
+staging directory per run.
+
+**Working agreements (operator)**: test before claiming (container/scratch tests; say "untested"); in
+planning discussions answer and stop (no offers to write things up); announce every sudo; commands for the
+operator on one short line; no web pages/artifacts unless asked; never put secrets in chat; commit only
+when asked; never touch `~/ai-env`, `~/switchyard` or paths Kent didn't create.
+
+---
+*Older sections below are history.*
+
+## History: update 2026-09-29 ~03:15 — Phase 5 step 1 done (install.sh run for the first time, end to end)
+
+- **`install.sh` had never been run end to end before today** (modules were installed one by one;
+  conformance checked those). First run found: distro check rejected Linux Mint 22.3 (noble base);
+  dry run hung reading /dev/stdout; alloy/grafana depended on the May prototype's Grafana apt repo and
+  grafana package; dry run could not pass dependent modules (`need()` now warns in dry runs); gent squid
+  check always died in dry runs (`||`/`&&` precedence). All fixed; full dry run passes (user namespace:
+  `SUDO_USER=administrator unshare -r ./install.sh --dry-run`, no sudo needed).
+- **Real install completed** (all 12 modules; lab, dev). llama self-test started kent-llama (by design).
+- **Pinned + cached** (architecture 3.2.2): grafana 13.2.2 / alloy 1.20.0-1 from SHA-256-pinned .deb
+  (no apt source; the one this morning's install added was retired by re-running the alloy module);
+  download cache `/var/cache/kent-install` (`--no-cache`; plain uninstall keeps, `--purge` removes;
+  reclaim: `sudo rm -rf /var/cache/kent-install`). Conformance checks pinned versions + no apt source.
+- Tests: 203 unit tests pass (gateway tests need fastapi, live tests need LITELLM_BIN; shellcheck not
+  installed). **Nothing committed yet.**
+- **Next:** reboot → `kent llama start` → `sudo ./kent-admin conformance` → record baseline. Then:
+  progress display for long install steps (promised to the operator), model-hash scope (backlog).
+
+## History: state at 2026-09-29 ~02:40 +08 (session restart; v0.1.0-rc.5)
 
 **Where things stand**
 - Repo `~/Documents/repo/harness-kent`, branch `release/v0.1.0`, PR #1 (open, into `main`). Latest release
@@ -55,7 +187,7 @@
 - Alloy live debugging (off after a fresh install unless `--live-debugging`); Hermes background skill-review
   cost (runs through `auto`, escalates to smart).
 
-**Backlog** (unchanged from rc.3 unless noted): Grafana alert "fallbacks to fast > N in 10 min" (F-05);
+**Backlog** (unchanged from rc.3 unless noted): **model-file security protocol (operator, 2026-09-29): revisit** — the llama installer hashes every `*.gguf` in the models dir (185 GB, ~3 min, on every install/rehash/profile switch) although Kent loads one model; options: hash only the configured model(s), skip unchanged files, rely on the start-time `kent-llama-verify`; install progress is silent on the console meanwhile; Grafana alert "fallbacks to fast > N in 10 min" (F-05);
 page-fetch backend for web research (SearXNG is search-only); re-capture manual answers K1–K6; tirith in NOTICE;
 audit P0/P1: sandboxed terminal for hardened, HITL approvals (F-17), risk register (F-03), Gent-output
 quarantine + layer-3 injection tests (F-02; now unblocked, the sudo grant is gone), pip-audit/trivy/SBOM +

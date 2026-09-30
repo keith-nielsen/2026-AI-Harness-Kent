@@ -18,7 +18,7 @@ all are installed by `sudo ./install.sh` at the repository root, in the order be
 | `searxng` | SearXNG metasearch (digest-pinned container, systemd-managed, read-only, no capabilities) | `kent-searxng` | 127.0.0.1:8888 |
 | `hermes` | the `kent` account + `kent-operators` group; Kent's own Hermes (commit-pinned, `uv sync --frozen`) and the tirith command scanner (pinned) in `/opt/kent-hermes`; managed policy (`configs/hermes/base.yaml` + `profile-<lab\|hardened>.yaml`), SOUL, bundled skills + `kent/crew-designer` | `kent` | — |
 | `kent-core` | Kent's tools (audit chain, digest, learnings review + escalation relay, QA, `kent-gent`), system timers as kent, the `kent` command and `kent-exec` entry point; enrols the installing operator | `kent` | — |
-| `llama` | llama.cpp `llama-server` (root-owned copy of the operator's build) as on-demand `kent-llama.service`; models by profile (lab: left operator-owned, write bits removed; hardened: `root:kent-models` 0440, restored on uninstall), read via read-only bind mount `/srv/kent/models`, SHA-256-checked at each start, per-file audit on rehash; polkit start/stop for `kent-operators`; CPU tuning oneshot | `kent-llama`; group `kent-models` (members: hardened only) | 127.0.0.1:8080 |
+| `llama` | llama.cpp `llama-server` (root-owned copy of the operator's build) as on-demand `kent-llama.service`; models by profile (lab: left operator-owned, write bits removed; hardened: `root:kent-models` 0440, restored on uninstall), read via read-only bind mount `/srv/kent/models`, selected model set SHA-256-recorded (operator-readable) and checked at each start, per-file audit on rehash; models filesystem recorded for start diagnostics (desktop automount: lab warns, hardened refuses); polkit start/stop for `kent-operators`; CPU tuning oneshot | `kent-llama`; group `kent-models` (members: hardened only) | 127.0.0.1:8080 |
 | `gent` | Gent runtime: internal Docker network, egress proxy, bridge sockets (gateway, proxy, search), image, spawn/destroy/ctl brokers | `kent-squid`; one `gent-<id>` per Gent | 127.0.0.1:3129; 172.30.0.1:3129/4000/8888 |
 
 Order: llama → litellm → prometheus/node_exporter → loki → alloy → grafana → gitea → searxng → hermes → kent-core → gent.
@@ -50,6 +50,15 @@ Grafana use SQLite.
   (`/var/lib/kent-install/manifest/<name>`). Vendor config files are never overwritten; use the
   vendor's drop-in or override mechanism instead. Uninstall removes only what the
   manifest lists and keeps state unless `--purge-state` is given.
+- **Pin every third-party piece; cache the downloads.** Versions, URLs and SHA-256 values live in
+  `versions.env` (tested versions only; upgrading means changing version, URL and hash together).
+  `fetch_verified` downloads through the installer's cache `/var/cache/kent-install` (root-only;
+  a cached file is checked against the same pinned hash); vendor `.deb` packages (grafana, alloy)
+  go through `ensure_pinned_deb`, which installs the verified file without adding an apt source.
+  pip and uv use the same cache for Python packages. `KENT_NO_CACHE=1` (`install.sh --no-cache`)
+  bypasses it. The cache belongs to the installer, not a module: a plain uninstall keeps it,
+  `uninstall.sh --purge` removes it, and `sudo rm -rf /var/cache/kent-install` reclaims the space
+  at any time.
 - **Record every directory systemd makes for a unit.** A `StateDirectory=`, `CacheDirectory=`,
   `LogsDirectory=` or `ConfigurationDirectory=` must be recorded in the module's manifest
   (`state` for data, `path` for caches); `tests/install/test_unit_directories_recorded.py` enforces

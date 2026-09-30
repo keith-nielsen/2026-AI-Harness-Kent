@@ -1,12 +1,63 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.1
-date: 2026-09-29
+version: 3.2.4
+date: 2026-09-30
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.4
+    date: 2026-09-30
+    summary: >
+      Gent tasks succeed more often on the local model. A task can name its one
+      deliverable (tasks.yaml `output:`); when the agent puts it in its final answer
+      instead of calling Write File, the Gent CEO saves that answer as the file. A
+      retry is told why the first attempt was rejected (it used to repeat the same
+      instructions). The default reply limit is 4000 tokens (was 1500, which cut off
+      answers) and a task can raise it (`max_tokens:`, capped at 16000). Workers and the
+      validator are told today's date (UTC), and the validator sees Kent's expert answer
+      when a task resumed from an escalation (a correct 2026 date was rejected as future). Found by the
+      first four-role research Gent: its findings came back as text, not a file.
+      The same run found the Gent could not read Kent's escalation answers (group kent,
+      since Kent's own account in 3.1.0): the inbox is now setgid to the Gent's group and
+      answers are 0640. Kent now reports stuck Gents (§8.2): an answer not picked up, a
+      repeating supervisor error, a silent supervisor, a task without agent steps.
+      Gents report to Kent and Kent to the operators (§7.5): the CEO records events
+      in stack.db; Kent copies them, logs each (Loki), assesses finished projects
+      automatically, and turns the important ones into notices, shown by `kent`
+      (chat start, status, `kent notices`) and in Kent's chat through a pre-turn
+      Hermes hook. Notices carry structured fields only, never Gent free text.
+  - version: 3.2.3
+    date: 2026-09-29
+    summary: >
+      Only the model files the settings select (MODEL_SET) are hashed and
+      recorded, not every GGUF in the models directory: Kent loads one set, and
+      hashing all of them read 185 GB on every install, rehash and profile switch.
+      Selecting another set (kent-admin llama set MODEL_SET=...) hashes it first
+      and leaves the setting unchanged if a file is missing; the start-time check
+      is unchanged. install.sh shows each module's elapsed time and latest step
+      while it runs. The models directory is recorded by filesystem (UUID and path
+      inside it, /etc/kent/llama/models.source) so a failed `kent llama start` names
+      a moved, missing or unmounted drive; a desktop automount (udisks, not in
+      fstab) is a warning in lab and refused in hardened. The read-only view is
+      released before udisks stops and unmounts lazily, so a busy view never stalls
+      shutdown. /etc/kent/llama is 0751 so operators can check the models against
+      the record (sha256sum -c). Found by the first reboot with Kent installed: an
+      empty /media/administrator/DATA was left behind and the drive came back as DATA1.
+  - version: 3.2.2
+    date: 2026-09-29
+    summary: >
+      Grafana and Alloy are pinned like every other third-party piece: the tested
+      versions (grafana 13.2.2, alloy 1.20.0-1) are installed from their .deb
+      files, checked against SHA-256 values in versions.env, with no apt source
+      added (so system updates cannot move them); a repository added by an earlier
+      install is retired. Kent installs the grafana package itself instead of
+      requiring one. Every pinned download (binaries, .deb and Python packages) is
+      kept in the installer's download cache /var/cache/kent-install and reused
+      after the same hash check; install.sh --no-cache bypasses it, a plain
+      uninstall keeps it and --purge removes it. The installer accepts Ubuntu 24.04
+      derivatives (Linux Mint 22). Found by the first end-to-end run of install.sh.
   - version: 3.2.1
     date: 2026-09-29
     summary: >
@@ -238,8 +289,20 @@ uninstall leaves them); in **hardened** they are `root:kent-models` (0750/0440),
 are recorded and restored on uninstall (`kent-admin profile` switches and re-applies). In both,
 the server reads them through a read-only bind mount at `/srv/kent/models`
 (`ro,nodev,nosuid,noexec`) and each start refuses a model whose SHA-256 differs from the
-recorded one (`/etc/kent/llama/models.sha256`). `kent-admin models rehash` after adding or
-replacing a model logs one audit line per added, changed or removed file with the operator's
+recorded one (`/etc/kent/llama/models.sha256`). Only the files the settings select
+(`MODEL_SET`) are recorded; selecting another set with `kent-admin llama set MODEL_SET=...`
+hashes it before the setting is written. The record is readable by operators (`/etc/kent/llama`
+is 0751: files by name, no listing), so `sha256sum -c /etc/kent/llama/models.sha256` in the models
+directory checks them by hand. `/etc/kent/llama/models.source` records the directory's filesystem
+(UUID and path inside it); when a start fails, `kent llama start` prints the likely cause (drive
+not connected, not mounted, or mounted under another name such as `DATA1` because an unclean
+shutdown left an empty `DATA` behind; Kent never removes that directory itself). Models on a
+desktop automount (udisks, not in `/etc/fstab`) work in lab once the operator has logged in (the
+installer warns); hardened refuses them and needs a system mount. The read-only view is ordered
+after `udisks2.service` (released first at shutdown) and unmounted lazily, so a shell inside it
+never stalls shutdown. Known limit: in lab the operator owns the model files, so a file could be
+swapped between the start-time hash check and the server opening it (hardened: root only).
+`kent-admin models rehash` after replacing a model logs one audit line per added, changed or removed file with the operator's
 name (`human:<name>`) and keeps the previous record as `models.sha256.<UTC time>`. SMT and
 CPU boost are switched off by a root oneshot while the server runs and restored after.
 
@@ -363,7 +426,11 @@ The agent's backstory gets the inherited team knowledge (`LEARNINGS.md`, §10).
 Tools (`templates/app/gent/tools.py`): Web Search and Read Web Page (through the
 egress proxy), Read/Write/List Files and Run Script (confined to
 `/data/workspace`). Effort is capped per project in `project.yaml`
-(`limits: {max_iter, max_tokens}`; defaults 6 / 1500) so the local model stays responsive.
+(`limits: {max_iter, max_tokens}`; defaults 6 / 4000) so the local model stays responsive;
+a task can raise `max_tokens` (cap 16000). A task's `output:` names its deliverable: the
+CEO asks for it by name and, if the agent gives it as its final answer instead of writing
+it, saves that answer as the file. A retry is told the validator's critique of the failed
+attempt.
 
 Project format (written by Kent, or by `skills/kent/crew-designer/scripts/generate_crew.py`):
 
@@ -371,7 +438,7 @@ Project format (written by Kent, or by `skills/kent/crew-designer/scripts/genera
 # project.yaml
 name: "kernel-check"
 goal: "What is delivered and for whom"
-limits: {max_iter: 6, max_tokens: 1500}
+limits: {max_iter: 6, max_tokens: 4000}
 # agents.yaml
 developer: {role: "...", goal: "...", backstory: "..."}
 # tasks.yaml (order = dependency order)
@@ -381,6 +448,8 @@ build:
   expected_output: "What done looks like"
   escalate: true                 # optional: ask Kent first
   question: "The expert question"   # optional
+  output: result.md              # optional: the deliverable, in /data/workspace
+  max_tokens: 6000               # optional: longer replies for this task
 ```
 
 ---
@@ -414,7 +483,8 @@ Planned: access-request evaluation (§15.4), seed-from (§11.2).
 
 - Seed the kanban from `tasks.yaml`; run tasks in order; requeue interrupted work at start.
 - Decide escalation (flag or router judgement); block and resume through the inbox.
-- Validate each result on `fast` against the files actually written; one retry, then escalate.
+- Validate each result on `fast` against the files actually written; one retry (told the
+  critique), then escalate.
 - Heartbeat on every agent step.
 - On completion: `REPORT.md`, 1–3 transferable learnings, exit.
 - With failed tasks: halt (don't finalise) and wait for Kent/operator.
@@ -430,6 +500,39 @@ aside for restore. Kent needs no venv of its own and never touches the
 operator's other Python environments.
 
 ---
+
+### 7.5 Reporting: worker → Gent → Kent → operator — Live
+
+- **Worker → Gent**: the CEO runs each worker's task itself and gets its result directly
+  (kanban status, `outputs/<task>.md`, the validator's verdict).
+- **Gent → Kent**: the CEO records events in its `stack.db` (`events`: `task_done` with the files
+  written, `task_failed`, `escalated`, `resumed`, `project_complete`, `halted`). The channel is
+  the same one-way path as learnings: the Gent writes its own database, Kent reads it (every
+  minute, `kent-poll-learnings`) and copies new events into `kent.db` (`gent_events`). Each event
+  is a journal line (`gent_event stack=… kind=… task=…`, in Loki under
+  `kent-poll-learnings.service`).
+- **Kent acts**: on `project_complete` Kent runs a frontier review (`kent-gent assess`, one frontier
+  call; `AUTO_ASSESS=0` in kent.conf turns it off): for each task, does the deliverable exist and
+  meet its description and expected output (pass / partial / fail and a one-line reason), the
+  main issues, an overall verdict and usefulness. The reply is validated (known task ids, fixed
+  result words, single capped lines) and stored in `gent_assessments.details`; `kent-gent status`
+  shows the latest review.
+- **The team's own verdict**: a task marked `verdict: true` (the project's review task) must end
+  with `Overall: PASS` or `Overall: FAIL`; the CEO reports only that word (`review` in the
+  `project_complete` event), and Kent passes it on only if it is exactly PASS or FAIL.
+- **Kent → operator**: project complete (with the team's verdict and Kent's per-task frontier review), task failed, halted (by the Gent
+  or the circuit breaker) and stuck become notices (`kent.db` `notices`, read state per reader).
+  `kent` shows unread notices before a chat starts, `kent status` counts them, `kent notices
+  [--all]` lists them. Kent's own chat gets them through a Hermes `pre_llm_call` shell hook
+  (`kent_notices_hook.py`, managed policy; consent is an allowlist entry for exactly that command,
+  not `hooks_auto_accept`): unread notices are added to that turn's user message, once per chat
+  session, a new session starting with the last 24 hours.
+- **Injection boundary**: notices reach Kent's model, so they are composed by Kent from
+  structured fields only: event kind, a validated task id, plain file names (others are dropped
+  and counted), the Gent's registry name and Kent's own assessment verdict. Gent summaries,
+  details and error texts stay in `gent_events` and the logs.
+- Not yet: notifications while nobody is at the terminal (desktop, phone via Hermes' messaging
+  gateway).
 
 ## 8. Governance Protocol
 
@@ -456,6 +559,18 @@ Halting stops the container (state kept), sets the registry to `paused`, opens a
 Gitea issue on `kent/gent-<id>` with the reasons, and writes an audit event. After
 the cause is fixed, `kent-gent resume <id>` drops a resume token in the inbox;
 the CEO retries its failed tasks once per token.
+
+**Stuck Gents** (same minute check; alert, no halt): a Gent can stop progressing without
+failing a task. Kent reports, once per new reason, when a delivered escalation answer has not
+been picked up after 2 minutes, when the CEO's loop has repeated the same error for 5 minutes
+or has not run for 10 minutes while no task is running (the CEO writes `/data/CEO_STATUS`
+each pass: time, last error, since when, how often), or when a running task has had no agent
+step for 20 minutes. Each report is a journal line (`STUCK:`, in Loki under
+`kent-poll-learnings.service`), an audit event `gent_stuck` (`gent_unstuck` on recovery) and a
+Gitea issue; `kent gent status` shows the same reasons. Nothing is halted: a stuck Gent uses no
+resources, and the cause may be Kent's (2026-09-30: the Gent could not read Kent's answer).
+The Gent's own log is in the journal under `kent-gent-<id>` (Docker's journald driver; the
+tag is set by Kent at spawn, so Gent output cannot pose as a source audit ingest trusts).
 
 ### 8.3 Nightly QA Audit — Live
 
@@ -775,10 +890,13 @@ If Docker stops, Kent and all services keep working; a crashed Gent affects noth
 
 ## 21. Platform Compatibility
 
-Tested: Ubuntu 24.04 LTS (systemd 255, Docker 29, Python 3.12). The modules use
-`apt` for packaged components (Alloy, Squid) and upstream release tarballs
-verified against pinned SHA-256 values (`install/services/versions.env`) for the
-rest. Other distributions are untested; Fedora/RHEL would need `dnf`, firewalld
+Tested: Linux Mint 22.3, built on Ubuntu 24.04 LTS (systemd 255, Docker 29, Python 3.12);
+the installer accepts Ubuntu 24.04 and derivatives built on it. Third-party components
+are pinned in `install/services/versions.env`, each with its SHA-256: upstream release
+tarballs and binaries, and the Grafana and Alloy `.deb` packages (installed from the file;
+no apt source is added, so system updates cannot move them). Squid and base packages come
+from the distribution's own apt repositories. Downloads are kept in the installer's cache
+(`/var/cache/kent-install`, see §22). Other distributions are untested; Fedora/RHEL would need `dnf`, firewalld
 and SELinux policy for the Gent bind mounts.
 
 ---
@@ -793,6 +911,7 @@ and SELinux policy for the Gent bind mounts.
 | Loki chunks (30 d) | 1–4 GB |
 | Gitea, kent.db, archives | small; grows with Gents |
 | Local models | operator's model directory (not managed by Kent) |
+| Installer download cache (`/var/cache/kent-install`) | ~1–3 GB: pinned binaries, grafana/alloy `.deb`, Python packages. Kept by a plain uninstall for the next install; removed by `uninstall.sh --purge`; safe to delete any time to reclaim space (`sudo rm -rf /var/cache/kent-install`) |
 
 Spawning is refused at ≥ 90% disk. Recommended host settings (not applied by the
 installer): swap ≥ 16 GB, `vm.swappiness=10`; schedule `fstrim` for idle hours on
