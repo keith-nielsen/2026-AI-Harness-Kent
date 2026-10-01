@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kent Observability Guide</title>
+<meta name="description" content="What Grafana, Prometheus, Loki and Alloy do in the Kent harness, where to find them on the reference host, and tested queries for investigating gateway routing.">
+<style>
+:root {
+  --bg: #fbfbf9; --panel: #ffffff; --text: #1d1f23; --muted: #5d6470; --line: #e3e3de;
+  --accent: #b4481f; --accent-soft: #fbeee7; --code-bg: #f3f2ee; --ok: #2d7a4b; --warn: #9a6a00;
+  --metrics: #2f6fb3; --logs: #8a4bb4; --collect: #2d7a4b; --view: #b4481f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171a; --panel: #1c1f23; --text: #e6e6e3; --muted: #a0a6b0; --line: #2d3137;
+    --accent: #f08a5d; --accent-soft: #2b1f19; --code-bg: #23272c; --ok: #6fcf97; --warn: #e5b94e;
+    --metrics: #79b0ec; --logs: #c79be8; --collect: #6fcf97; --view: #f08a5d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15171a; --panel: #1c1f23; --text: #e6e6e3; --muted: #a0a6b0; --line: #2d3137;
+  --accent: #f08a5d; --accent-soft: #2b1f19; --code-bg: #23272c; --ok: #6fcf97; --warn: #e5b94e;
+  --metrics: #79b0ec; --logs: #c79be8; --collect: #6fcf97; --view: #f08a5d;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+}
+.wrap { max-width: 980px; margin: 0 auto; padding: 32px 16px 80px; }
+header { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 28px; }
+h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.35rem; margin: 48px 0 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+h3 { font-size: 1.08rem; margin: 26px 0 8px; }
+p, li { max-width: 72ch; }
+a { color: var(--accent); text-underline-offset: 2px; }
+.lede { color: var(--muted); margin: 0; }
+.meta { font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 0 0 8px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+nav.toc li { margin: 2px 0; break-inside: avoid; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin: 16px 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; border-top: 4px solid var(--c, var(--accent)); }
+.card h3 { margin: 0 0 4px; }
+.card .role { font-weight: 600; margin: 0 0 6px; }
+.card p { margin: 6px 0; font-size: 0.95rem; }
+.tag { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 1px 8px; border-radius: 99px; background: var(--code-bg); color: var(--muted); }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.94rem; }
+.tablewrap { overflow-x: auto; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; background: var(--code-bg); }
+code { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.q { position: relative; margin: 10px 0 16px; }
+.q pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 70px 12px 14px; overflow-x: auto; font-size: 0.86rem; line-height: 1.5; }
+.q pre code { background: none; padding: 0; font-size: inherit; }
+.q .label { font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+.copy { position: absolute; top: 28px; right: 8px; font: inherit; font-size: 0.78rem; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+.q.nolabel .copy { top: 8px; }
+.copy:hover { border-color: var(--accent); }
+.note { background: var(--accent-soft); border-left: 4px solid var(--accent); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+.note p { margin: 4px 0; }
+.flow { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 16px 0; }
+.flow svg { width: 100%; height: auto; display: block; }
+.flow text { font-family: system-ui, sans-serif; fill: var(--text); }
+.flow .sub { fill: var(--muted); font-size: 11px; }
+.flow .box { fill: var(--panel); stroke-width: 2; }
+.flow .arrow { stroke: var(--muted); stroke-width: 1.6; fill: none; marker-end: url(#ah); }
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps li { counter-increment: s; position: relative; padding-left: 38px; margin: 10px 0; }
+.steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: 0.85rem; display: grid; place-items: center; }
+.refs li { margin: 4px 0; }
+.themebtn { float: right; font: inherit; font-size: 0.8rem; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <button class="themebtn" id="themebtn" type="button" aria-label="Toggle light or dark theme">Theme</button>
+  <h1>Kent observability guide</h1>
+  <p class="lede">What Grafana, Prometheus, Loki and Alloy each do in the Kent harness, where to find them on the reference host, and tested queries for investigating the gateway.</p>
+  <p class="meta">Reference host, 28 Sep 2026 · Grafana 13.1.0 · Prometheus 3.15.0 · Loki 3.7.8 · Alloy 1.20.0 · Every service listens on 127.0.0.1 only; open these links on the host itself.</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <ol>
+    <li><a href="#model">Metrics vs logs</a></li>
+    <li><a href="#tools">The four tools</a></li>
+    <li><a href="#where">Where to find them</a></li>
+    <li><a href="#grafana">Using Grafana</a></li>
+    <li><a href="#logql">Loki queries (LogQL)</a></li>
+    <li><a href="#promql">Prometheus queries (PromQL)</a></li>
+    <li><a href="#terminal">Terminal commands</a></li>
+    <li><a href="#investigate">A worked investigation</a></li>
+    <li><a href="#tuning">Noise tuning done</a></li>
+    <li><a href="#next">Not built yet</a></li>
+    <li><a href="#refs">Documentation</a></li>
+  </ol>
+</nav>
+
+<section id="model">
+<h2>1. Metrics vs logs</h2>
+<p>There are four tools but only two kinds of data.</p>
+<ul>
+  <li><strong>Metrics</strong> are numbers over time: request counts, latency, CPU, disk. They're cheap to keep and answer <em>how much, how often, and is it getting worse</em>.</li>
+  <li><strong>Logs</strong> are individual events as text: one line per gateway call, per error, per service message. They answer <em>what exactly happened, and why</em>.</li>
+</ul>
+<div class="flow" role="img" aria-label="Data flow: services write to journald, Alloy collects and ships logs to Loki; Prometheus scrapes metrics endpoints; Grafana queries both">
+<svg viewBox="0 0 760 250" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor" style="fill: var(--muted)"/></marker></defs>
+  <rect class="box" x="10" y="20" width="170" height="64" rx="8" style="stroke: var(--line)"/>
+  <text x="95" y="47" text-anchor="middle" font-weight="600" font-size="14">journald</text>
+  <text class="sub" x="95" y="66" text-anchor="middle">every service's log lines</text>
+  <rect class="box" x="10" y="160" width="170" height="64" rx="8" style="stroke: var(--line)"/>
+  <text x="95" y="187" text-anchor="middle" font-weight="600" font-size="14">/metrics endpoints</text>
+  <text class="sub" x="95" y="206" text-anchor="middle">LiteLLM, host, Gitea, Loki…</text>
+  <rect class="box" x="240" y="20" width="150" height="64" rx="8" style="stroke: var(--collect)"/>
+  <text x="315" y="47" text-anchor="middle" font-weight="600" font-size="14">Alloy</text>
+  <text class="sub" x="315" y="66" text-anchor="middle">collect · label · filter</text>
+  <rect class="box" x="450" y="20" width="130" height="64" rx="8" style="stroke: var(--logs)"/>
+  <text x="515" y="47" text-anchor="middle" font-weight="600" font-size="14">Loki</text>
+  <text class="sub" x="515" y="66" text-anchor="middle">log store</text>
+  <rect class="box" x="450" y="160" width="130" height="64" rx="8" style="stroke: var(--metrics)"/>
+  <text x="515" y="187" text-anchor="middle" font-weight="600" font-size="14">Prometheus</text>
+  <text class="sub" x="515" y="206" text-anchor="middle">metric store</text>
+  <rect class="box" x="630" y="90" width="120" height="64" rx="8" style="stroke: var(--view)"/>
+  <text x="690" y="117" text-anchor="middle" font-weight="600" font-size="14">Grafana</text>
+  <text class="sub" x="690" y="136" text-anchor="middle">views · alerts · you</text>
+  <path class="arrow" d="M180,52 L236,52"/>
+  <path class="arrow" d="M390,52 L446,52"/>
+  <path class="arrow" d="M180,192 L446,192"/>
+  <text class="sub" x="313" y="184" text-anchor="middle">scraped every 15 s</text>
+  <path class="arrow" d="M580,60 L630,105"/>
+  <path class="arrow" d="M580,184 L630,140"/>
+</svg>
+</div>
+<p><strong>Rule of thumb:</strong> start in Grafana. Use metrics (Prometheus) to spot <em>that</em> something is wrong and logs (Loki) to find out <em>why</em>. Only touch Alloy to change what gets collected.</p>
+</section>
+
+<section id="tools">
+<h2>2. The four tools</h2>
+<div class="grid">
+  <div class="card" style="--c: var(--collect)">
+    <h3>Alloy</h3>
+    <p class="role">The log collector</p>
+    <p>Reads the systemd journal, turns fields into labels (<code>unit</code>, <code>level</code>, and for the gateway <code>kent_event</code> and <code>identity</code>), drops noise, and ships the rest to Loki.</p>
+    <p><strong>Touch it when</strong> adding a log source or a label, or filtering noise. Live debugging shows lines passing through each stage.</p>
+    <p><span class="tag">Kent</span> The right place for redaction (audit F-08) before data is stored.</p>
+  </div>
+  <div class="card" style="--c: var(--logs)">
+    <h3>Loki</h3>
+    <p class="role">The log store</p>
+    <p>Holds every service's logs, including one JSON line per gateway call: who called, which tier the router chose, success or failure, latency, tokens and error.</p>
+    <p><strong>Ask it</strong> "why did that call fall back?", "what did Kent do at 02:00?", "was the gent identity refused?"</p>
+    <p><span class="tag">Kent</span> The per-call audit trail. 30-day retention; F-04 covers making it tamper-proof and kept off the host.</p>
+  </div>
+  <div class="card" style="--c: var(--metrics)">
+    <h3>Prometheus</h3>
+    <p class="role">The metric store</p>
+    <p>Every 15 s it collects counters and gauges from LiteLLM, the host (node_exporter), Loki, Grafana, Gitea, Alloy and itself.</p>
+    <p><strong>Ask it</strong> "fallback rate this week?", "p95 latency?", "when will the disk be full?", "is every service up?"</p>
+    <p><span class="tag">Kent</span> The source for alerts (F-05) and, later, spend per identity.</p>
+  </div>
+  <div class="card" style="--c: var(--view)">
+    <h3>Grafana</h3>
+    <p class="role">The window and the alarm bell</p>
+    <p>Dashboards for everyday questions, Explore and Drilldown for investigations, and alerting (not set up yet). It stores no data of its own; it queries Loki and Prometheus.</p>
+    <p><strong>Start here</strong> for almost everything.</p>
+  </div>
+</div>
+</section>
+
+<section id="where">
+<h2>3. Where to find them</h2>
+<div class="tablewrap"><table>
+  <thead><tr><th>Service</th><th>Address</th><th>What to open</th></tr></thead>
+  <tbody>
+    <tr><td>Grafana</td><td><a href="http://127.0.0.1:3001">127.0.0.1:3001</a></td><td>Login <code>admin</code>; the password is in <code>~/.config/kent/grafana_admin_password</code>. If asked to change it, choose <strong>Skip</strong>: the installers use that file.</td></tr>
+    <tr><td>· Kent overview</td><td><a href="http://127.0.0.1:3001/d/kent-overview/kent-overview">/d/kent-overview</a></td><td>Calls by identity, denials, router tiers, scrape targets, CPU and memory, latest gateway log</td></tr>
+    <tr><td>· Kent routing</td><td><a href="http://127.0.0.1:3001/d/kent-routing/kent-routing">/d/kent-routing</a></td><td>Tier decisions, escalation outcomes, fallbacks, failure reasons, p95 latency, tokens per identity, backends, failed-call log</td></tr>
+    <tr><td>· Logs Drilldown</td><td><a href="http://127.0.0.1:3001/a/grafana-lokiexplore-app/explore">/a/grafana-lokiexplore-app/explore</a></td><td>Explore logs without writing queries: volume, fields, patterns, level filters</td></tr>
+    <tr><td>· Metrics Drilldown</td><td><a href="http://127.0.0.1:3001/a/grafana-metricsdrilldown-app/drilldown">/a/grafana-metricsdrilldown-app/drilldown</a></td><td>Browse every metric as a small graph; search <code>litellm</code></td></tr>
+    <tr><td>· Explore</td><td><a href="http://127.0.0.1:3001/explore">/explore</a></td><td>Ad-hoc queries; <strong>Split</strong> for logs and metrics side by side</td></tr>
+    <tr><td>Prometheus</td><td><a href="http://127.0.0.1:9090/query">127.0.0.1:9090/query</a></td><td>Run PromQL and click <strong>Explain</strong> (tree view); Status → Targets, TSDB Status; metrics explorer</td></tr>
+    <tr><td>Alloy</td><td><a href="http://127.0.0.1:12345">127.0.0.1:12345</a></td><td>Components and their health; <code>loki.process.kent</code> → <strong>Live debugging</strong></td></tr>
+    <tr><td>Loki</td><td>127.0.0.1:3100</td><td>API only; query it through Grafana or <code>curl</code></td></tr>
+    <tr><td>node_exporter</td><td><a href="http://127.0.0.1:9100/metrics">127.0.0.1:9100/metrics</a></td><td>Raw host metrics</td></tr>
+    <tr><td>LiteLLM metrics</td><td>127.0.0.1:4000/metrics/</td><td>Needs your operator key (see <a href="#terminal">terminal commands</a>)</td></tr>
+    <tr><td>Gitea</td><td>127.0.0.1:3000</td><td>Not monitoring. Listed because it's easy to confuse with Grafana's port.</td></tr>
+  </tbody>
+</table></div>
+<div class="note"><p>Log timestamps from the gateway are <strong>UTC</strong>, 8 hours behind local time (+08). Grafana shows local time.</p></div>
+</section>
+
+<section id="grafana">
+<h2>4. Using Grafana</h2>
+<h3>Explore, with Loki (Kent) selected</h3>
+<ol class="steps">
+  <li>Pick <strong>Loki (Kent)</strong> from the data source dropdown and switch the editor from <strong>Builder</strong> to <strong>Code</strong>.</li>
+  <li>Paste a query from <a href="#logql">section 5</a> and press <strong>Run query</strong> (Shift+Enter). Set the time range wide enough (e.g. Last 3 hours).</li>
+  <li>For logs next to metrics: click <strong>Split</strong>, set the new pane to <strong>Prometheus (Kent)</strong>, and paste a query from <a href="#promql">section 6</a>. Both panes share the time range.</li>
+</ol>
+<h3>Filtering by log level</h3>
+<p>Above log results is a <strong>log volume</strong> chart whose legend lists levels (info, warning, error, critical, debug). Click a level to show only it, Ctrl-click (Cmd on a Mac) to add or remove more, and click again to reset. In <strong>Logs Drilldown</strong>, the <em>Labels</em> tab → <code>level</code> has Include and Exclude buttons per level.</p>
+<p>Levels come from journald's priority field. journald's <code>notice</code> level (between info and warning) isn't a Grafana level, so it may show as its own colour or as <code>unknown</code>. Alloy's live debugging has no level buttons; type e.g. <code>level="error"</code> into its search box instead.</p>
+<h3>Worth trying</h3>
+<ul>
+  <li><strong>Logs Drilldown</strong> → <code>kent-litellm.service</code> → <em>Fields</em> tab: <code>routed_tier</code>, <code>status</code> and <code>identity</code>, each with a breakdown chart.</li>
+  <li><strong>Administration → Advisor</strong>: health checks for data sources and plugins (new in Grafana 13).</li>
+</ul>
+</section>
+
+<section id="logql">
+<h2>5. Loki queries (LogQL)</h2>
+<p>A query always starts with a label selector <code>{…}</code>. After that, <code>| json</code> parses each line into fields, <code>unwrap</code> turns a field into a number, and <code>line_format</code> rewrites the text. All of these were tested against this host.</p>
+
+<div class="q"><div class="label">Router decisions and outcomes (success, or failure and fallback)</div><pre><code>sum by (routed_tier, status) (count_over_time({unit="kent-litellm.service", kent_event="llm_call"} | json | model_group="auto" [3h]))</code></pre></div>
+<div class="q"><div class="label">p95 latency per tier; unwrap turns a log field into a number</div><pre><code>quantile_over_time(0.95, {unit="kent-litellm.service", kent_event="llm_call"} | json | __error__="" | unwrap latency_s [3h]) by (model_group)</code></pre></div>
+<div class="q"><div class="label">Prompt tokens per identity (the cost driver once Opus is billed)</div><pre><code>sum by (identity) (sum_over_time({unit="kent-litellm.service", kent_event="llm_call"} | json | __error__="" | unwrap prompt_tokens [3h]))</code></pre></div>
+<div class="q"><div class="label">Failed calls, with the reason (recorded since 28 Sep)</div><pre><code>{unit="kent-litellm.service", kent_event="llm_call"} | json | status="failure"</code></pre></div>
+<div class="q"><div class="label">Readable one-line view of every call</div><pre><code>{unit="kent-litellm.service", kent_event="llm_call"} | json | line_format "{{.identity}} {{.model_group}}→{{.routed_tier}} {{.status}} {{.latency_s}}s"</code></pre></div>
+<div class="q"><div class="label">The five noisiest services in the last hour</div><pre><code>topk(5, sum by (unit) (count_over_time({job="systemd-journal"}[1h])))</code></pre></div>
+<div class="q"><div class="label">Log lines per level in the last hour</div><pre><code>sum by (level) (count_over_time({job="systemd-journal"}[1h]))</code></pre></div>
+</section>
+
+<section id="promql">
+<h2>6. Prometheus queries (PromQL)</h2>
+<p>Paste these at <a href="http://127.0.0.1:9090/query">127.0.0.1:9090/query</a> and click <strong>Explain</strong> to see each step of the query, or use them in Grafana. <code>increase()</code> handles the counter resets that happen whenever the gateway restarts.</p>
+<div class="q"><div class="label">Failures by exception class</div><pre><code>sum by (exception_class) (increase(litellm_deployment_failure_responses_total[1h]))</code></pre></div>
+<div class="q"><div class="label">Fallbacks to another tier</div><pre><code>sum by (fallback_model) (increase(litellm_deployment_successful_fallbacks_total[1h]))</code></pre></div>
+<div class="q"><div class="label">Where calls went (:8080 local model, :4010 oracle, api.anthropic.com Claude)</div><pre><code>sum by (api_base) (increase(litellm_deployment_total_requests_total[1h]))</code></pre></div>
+<div class="q"><div class="label">Gateway p95 latency from the histogram</div><pre><code>histogram_quantile(0.95, sum by (le, model_group) (rate(litellm_request_total_latency_metric_bucket[1h])))</code></pre></div>
+<div class="q"><div class="label">Free disk space forecast 7 days ahead (GB)</div><pre><code>predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[6h], 7*86400) / 1e9</code></pre></div>
+<div class="q"><div class="label">CPU busy %</div><pre><code>100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])))</code></pre></div>
+</section>
+
+<section id="terminal">
+<h2>7. Terminal commands</h2>
+<p>Short lines, safe to paste one at a time. A line ending in <code>|</code> continues on the next.</p>
+<div class="q"><div class="label">Every gateway call from the journal (bypasses Loki)</div><pre><code>F='fromjson?|select(.kent_event)|[.ts,.model_group,.routed_tier,.status]|@tsv'
+journalctl -u kent-litellm --since -1h -o cat | jq -Rr "$F"</code></pre></div>
+<div class="q"><div class="label">Scrape targets and their health</div><pre><code>T=localhost:9090/api/v1/targets
+curl -s $T | jq -c '.data.activeTargets[]|[.labels.job,.health]'</code></pre></div>
+<div class="q"><div class="label">Latest gateway call records from Loki</div><pre><code>L=localhost:3100/loki/api/v1/query_range
+Q='{unit="kent-litellm.service",kent_event="llm_call"}'
+curl -sG $L --data-urlencode "query=$Q" --data-urlencode limit=5 |
+  jq -r '.data.result[].values[][1]'</code></pre></div>
+<div class="q"><div class="label">Raw gateway metrics (anonymous requests get 401)</div><pre><code>K=$(cat ~/.config/kent/litellm_operator_key)
+curl -s -H "Authorization: Bearer $K" localhost:4000/metrics/ |
+  grep '^litellm_deployment_total_requests_total'</code></pre></div>
+<div class="q"><div class="label">What the monitoring services themselves are doing (Ctrl+C to stop)</div><pre><code>journalctl -f -u kent-loki -u kent-prometheus -u alloy -u grafana-server</code></pre></div>
+</section>
+
+<section id="investigate">
+<h2>8. A worked investigation (28 Sep 2026)</h2>
+<p>During a tier test, every question seemed to be answered by the local model. This is how the tools found the cause.</p>
+<ol class="steps">
+  <li><strong>Loki</strong>: the router <em>had</em> escalated (14 smart, 4 frontier), but each escalation failed within about 2 ms and the gateway fell back to fast.</li>
+  <li><strong>Prometheus</strong>: <code>litellm_deployment_failure_responses_total</code> showed <code>exception_class="UnsupportedParamsError"</code>, 16 times.</li>
+  <li><strong>Cause</strong>: Hermes sends <code>reasoning_effort</code>. The local tiers dropped it (<code>drop_params: true</code>) but the oracle tiers didn't, so LiteLLM rejected the call before sending it anywhere.</li>
+  <li><strong>Fix</strong>: <code>drop_params</code> on the oracle tiers, a test that fails if it goes missing, and the gateway now logs <code>error_class</code> and <code>error</code> on every failure, so the next silent fallback explains itself.</li>
+</ol>
+</section>
+
+<section id="tuning">
+<h2>9. Noise tuning done</h2>
+<div class="tablewrap"><table>
+  <thead><tr><th>Source</th><th>Before</th><th>After</th><th>How</th></tr></thead>
+  <tbody>
+    <tr><td>open-webui.service restart loop</td><td>~4,400 lines/h</td><td>0</td><td>Leftover unit from the May dev stack; removed with its data</td></tr>
+    <tr><td>Gitea <code>GET /metrics</code> (Prometheus scrapes)</td><td>240 lines/h</td><td>0 in Loki</td><td>Alloy <code>stage.drop</code>; other Gitea requests are kept, and the journal keeps everything</td></tr>
+    <tr><td>Loki's own housekeeping</td><td>~1,500 lines/h</td><td>warnings and errors only</td><td><code>log_level: warn</code></td></tr>
+  </tbody>
+</table></div>
+</section>
+
+<section id="next">
+<h2>10. Not built yet</h2>
+<ul>
+  <li><strong>Alerting</strong> (audit F-05). First rule: "gateway fell back to fast more than N times in 10 minutes", which would have caught the bug above immediately. Grafana alerting needs no extra service.</li>
+  <li><strong>Per-account access to telemetry.</strong> Loki (:3100) and the Alloy UI (:12345) answer any local account, including Kent's in the lab profile. Live debugging is opt-in (<code>install/services/alloy/install.sh --live-debugging</code>) and any re-run without the flag turns it off.</li>
+  <li><strong>Page fetching for web research.</strong> SearXNG only searches; <code>web_extract</code> needs a backend (a self-hosted Firecrawl or a small local fetcher), sent through controlled egress.</li>
+  <li><strong>Off-host, tamper-proof logs</strong> (audit F-04) and <strong>per-identity budgets</strong> (F-11).</li>
+</ul>
+</section>
+
+<section id="refs">
+<h2>11. Documentation</h2>
+<ul class="refs">
+  <li>Grafana: <a href="https://grafana.com/docs/grafana/latest/">documentation</a> · <a href="https://grafana.com/docs/grafana/latest/explore/">Explore</a> · <a href="https://grafana.com/docs/grafana/latest/explore/logs-integration/">logs in Explore</a> · <a href="https://grafana.com/docs/grafana/latest/explore/simplified-exploration/">Drilldown apps</a> · <a href="https://grafana.com/docs/grafana/latest/alerting/">alerting</a> · <a href="https://grafana.com/docs/grafana/latest/whatsnew/whats-new-in-v13-0/">what's new in 13.0</a></li>
+  <li>Prometheus: <a href="https://prometheus.io/docs/introduction/overview/">overview</a> · <a href="https://prometheus.io/docs/prometheus/latest/querying/basics/">PromQL basics</a> · <a href="https://prometheus.io/docs/prometheus/latest/querying/functions/">PromQL functions</a> · <a href="https://prometheus.io/blog/2024/11/14/prometheus-3-0/">Prometheus 3.0 announcement</a></li>
+  <li>Loki: <a href="https://grafana.com/docs/loki/latest/">documentation</a> · <a href="https://grafana.com/docs/loki/latest/query/">LogQL</a> · <a href="https://grafana.com/docs/loki/latest/query/metric_queries/">metric queries</a> · <a href="https://grafana.com/docs/loki/latest/query/query_examples/">query examples</a></li>
+  <li>Alloy: <a href="https://grafana.com/docs/alloy/latest/">documentation</a> · <a href="https://grafana.com/docs/alloy/latest/troubleshoot/debug/">UI and live debugging</a> · <a href="https://grafana.com/docs/alloy/latest/reference/components/loki/loki.process/">loki.process reference</a></li>
+  <li>LiteLLM: <a href="https://docs.litellm.ai/docs/proxy/prometheus">Prometheus metrics</a> · Gitea: <a href="https://docs.gitea.com/administration/logging-config">logging configuration</a></li>
+</ul>
+<p>In this repository: <code>docs/architecture.md</code> (§17 Observability &amp; Alerting), <code>docs/dev-notes.md</code>, <code>configs/alloy.alloy</code>, <code>configs/loki.yaml</code>, <code>configs/prometheus.yml</code>, <code>configs/grafana/</code>.</p>
+</section>
+
+<footer>Kent harness · docs/observability-guide.html · written 28 Sep 2026 for v0.1.0-rc.3. Queries were tested on the reference host; the external links were checked on the same day.</footer>
+</div>
+<script>
+(function () {
+  document.querySelectorAll('.q').forEach(function (q) {
+    var b = document.createElement('button');
+    b.className = 'copy'; b.type = 'button'; b.textContent = 'Copy';
+    if (!q.querySelector('.label')) q.classList.add('nolabel');
+    b.addEventListener('click', function () {
+      var t = q.querySelector('code').innerText;
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1200); };
+      if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(t).then(done, function () { fallback(t); done(); }); }
+      else { fallback(t); done(); }
+    });
+    q.appendChild(b);
+  });
+  function fallback(t) { var a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (e) {} document.body.removeChild(a); }
+  var root = document.documentElement, btn = document.getElementById('themebtn');
+  try { var s = localStorage.getItem('kent-guide-theme'); if (s) root.setAttribute('data-theme', s); } catch (e) {}
+  btn.addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') ? root.getAttribute('data-theme') === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var next = dark ? 'light' : 'dark'; root.setAttribute('data-theme', next);
+    try { localStorage.setItem('kent-guide-theme', next); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>

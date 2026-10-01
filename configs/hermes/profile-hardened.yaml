@@ -1,0 +1,25 @@
+# Profile "hardened": deployment. Kent operates the estate through its kent-* commands; code
+# execution and delegation are left to sandboxed Gents; privileged and dangerous commands are
+# refused or require a human. (A sandboxed terminal backend is planned: docs/design §7.)
+platform_toolsets:
+  cli: [clarify, todo, memory, session_search, skills, web, file, terminal]
+terminal:
+  backend: local
+security:
+  tirith_fail_open: false              # no scanner, no command
+approvals:
+  mode: manual
+  deny:                                 # replaces the base list (lists are pinned whole)
+    - "*hermes* -z*"
+    - "*hermes*--oneshot*"
+    - "*hermes*--yolo*"
+    - "*hermes_yolo_mode*"
+    - "*hermes_managed_dir*"
+    - "*docker *"
+    - "*/etc/kent/*credentials*"
+    - "*/etc/kent/hermes/managed*"
+    - "sudo *"
+    - "*curl *"
+    - "*wget *"
+    - "*python* -c *"
+    - "*nc *"

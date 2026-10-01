@@ -1,0 +1,10 @@
+[Unit]
+Description=Kent: verify and anchor the HMAC audit chain (schedule)
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,71 @@
+# /etc/systemd/system/kent-litellm.service
+# LiteLLM inference gateway for Kent. Installed by install/services/litellm/install.sh.
+#
+# Runs as the dedicated litellm:litellm account. Secrets live root-only under
+# /etc/kent/litellm/credentials/ and reach the process through LoadCredential
+# (a private, per-run copy readable only by this service).
+
+[Unit]
+Description=LiteLLM inference gateway (Kent)
+Documentation=https://github.com/keith-nielsen/2026-AI-Harness-Kent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=litellm
+Group=litellm
+ExecStart=/opt/kent-litellm/libexec/kent-litellm-start
+# One key per identity (see kent_gateway.POLICY) + the upstream Anthropic key.
+LoadCredential=operator_key:/etc/kent/litellm/credentials/operator_key
+LoadCredential=kent_key:/etc/kent/litellm/credentials/kent_key
+LoadCredential=gent_key:/etc/kent/litellm/credentials/gent_key
+LoadCredential=metrics_key:/etc/kent/litellm/credentials/metrics_key
+LoadCredential=anthropic_api_key:/etc/kent/litellm/credentials/anthropic_api_key
+
+# State (and LiteLLM's runtime UI copy, via LITELLM_NON_ROOT) in /var/lib/litellm.
+StateDirectory=litellm
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/litellm
+Environment=HOME=/var/lib/litellm
+Environment=LITELLM_NON_ROOT=true
+# Use the bundled model cost map instead of fetching it from GitHub at startup.
+Environment=LITELLM_LOCAL_MODEL_COST_MAP=True
+Environment=LITELLM_DONT_SHOW_FEEDBACK_BOX=true
+Environment=PYTHONDONTWRITEBYTECODE=1
+# kent_gateway (identity auth + activity log) is loaded from here.
+Environment=PYTHONPATH=/opt/kent-litellm/lib
+# Operator-tunable settings (FALLBACK_TIMEOUT). Written by install.sh.
+EnvironmentFile=/etc/kent/litellm/litellm.env
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# --- Hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

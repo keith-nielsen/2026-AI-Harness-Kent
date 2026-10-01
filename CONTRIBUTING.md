@@ -1,40 +1,38 @@
 # Contributing to Kent
 
-**Status: Internal development phase — public contributions not yet open.**
+**Status: v0.1.0 release candidate. Public contributions are not open yet**, but
+issues and discussion are welcome. Security issues: see [SECURITY.md](SECURITY.md).
 
-Kent is currently in pre-alpha architecture phase. The design is stable,
-installation scripts are being validated, and the system has not yet been
-deployed on target hardware.
+## Development setup
 
-## Timeline
+See [`docs/dev-notes.md`](docs/dev-notes.md): prerequisites, installing the
+modules, the dev/prod/sim gateway configs, simulations, tests and rollback checks.
 
-We plan to open for public collaboration when:
+## Conventions
 
-- [ ] The installation pipeline has been validated end-to-end on target hardware
-- [ ] At least one Gent has been successfully spawned from template
-- [ ] Core integration tests pass consistently
-- [ ] The knowledge-sharing cross-pollination mechanism is verified
+- **Modules** (`install/services/<name>/`): follow [`install/services/README.md`](install/services/README.md).
+  Own account per service; code in `/opt/kent-<name>`, config in `/etc/kent/<name>`,
+  state in `/var/lib/<name>`; record everything in the manifest; never adopt or
+  modify what Kent didn't create; drop-ins instead of editing vendor files;
+  `--dry-run` support; loopback-only listeners; hardened units (exposure ≤ 3.0).
+- **Artifacts:** pin and verify: SHA-256 in `install/services/versions.env`,
+  `--require-hashes` lock files, digest-pinned images. No `curl | sh`, no `latest`.
+- **Secrets:** systemd `LoadCredential` or read-only file mounts; never environment
+  files, never the repo.
+- **Shell:** `set -euo pipefail`; clean `shellcheck -S warning`.
+- **Python:** standard library where possible; Gent and Kent tools treat any
+  model or Gent output as untrusted data.
+- **Docs:** update [`docs/architecture.md`](docs/architecture.md) (Live/Planned),
+  [`docs/controls.md`](docs/controls.md) and [`docs/conformance.md`](docs/conformance.md)
+  with any behaviour change.
 
-## In the Meantime
+## Required checks before a change
 
-- **Questions, ideas, and discussion:** Watch this repo for a future
-  announcement about public channels
-- **Bugs:** If you find a security issue, see [SECURITY.md](SECURITY.md)
-- **Feature suggestions:** Noted internally — tracked against the roadmap
-
-## When Contributions Open
-
-This file will be updated with:
-
-- How to set up a development environment
-- Coding conventions (shell, Python, YAML)
-- How to run the test gates
-- PR review process
-
-Until then, the project is being prepared for public collaboration.
-Thank you for your interest.
+1. CI (`.github/workflows/validate.yml`): shellcheck, config/Python validation, pinned artifacts, unit tests.
+2. On a test machine: install the changed module, `tests/conformance/conformance.py` with 0 FAIL,
+   and for install changes a rollback diff against a pre-install snapshot.
+3. Security-relevant changes: add adversarial tests next to the existing ones in `tests/`.
 
 ## Code of Conduct
 
-All contributors will be expected to follow a standard Code of Conduct,
-which will be published when contributions open.
+A Code of Conduct will be published when contributions open.

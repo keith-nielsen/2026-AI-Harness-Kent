@@ -1,0 +1,27 @@
+[Unit]
+Description=Kent: nightly QA audit of Gent work
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/kent-core/bin/kent_qa_audit.py 
+User=kent
+Group=kent
+Environment=KENT_CONF=/etc/kent/kent/kent.conf HOME=/var/lib/kent
+WorkingDirectory=/var/lib/kent
+UMask=0027
+Nice=10
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kent
+PrivateDevices=yes
+RestrictNamespaces=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# kent-gpu-metrics — NVIDIA GPU temperature, load, power and memory for Prometheus, via
+# node_exporter's textfile collector (no extra port, no third-party exporter). Run every 15 s
+# by kent-gpu-metrics.timer as node_exporter. Writes OUT atomically (the collector must never
+# read a half-written file). kent_gpu_up 0 = nvidia-smi failed; the other series then vanish.
+set -uo pipefail
+OUT="${1:-/var/lib/kent-node-exporter/textfile/gpu.prom}"
+tmp="$(mktemp "$OUT.XXXXXX")" || exit 1
+trap 'rm -f "$tmp"' EXIT
+if csv="$(nvidia-smi --query-gpu=index,name,temperature.gpu,utilization.gpu,power.draw,memory.used,memory.total \
+             --format=csv,noheader,nounits 2>/dev/null)" && [[ -n "$csv" ]]; then
+    awk -F', *' '
+        { gsub(/["\\]/, "", $2); lab[NR] = "{gpu=\"" $1 "\",name=\"" $2 "\"}"
+          v["kent_gpu_temperature_celsius", NR] = $3; v["kent_gpu_utilization_ratio", NR] = $4 / 100
+          v["kent_gpu_power_watts", NR] = $5
+          v["kent_gpu_memory_used_bytes", NR] = $6 * 1048576; v["kent_gpu_memory_total_bytes", NR] = $7 * 1048576
+          ok[NR] = ($3 ~ /^[0-9.]+$/) }   # "[N/A]" on cards that do not report a value
+        function series(name, help, i) {
+          print "# HELP " name " " help; print "# TYPE " name " gauge"
+          for (i = 1; i <= NR; i++) if (ok[i]) printf "%s%s %s\n", name, lab[i], v[name, i] }
+        END {
+          print "# HELP kent_gpu_up 1 if nvidia-smi answered"; print "# TYPE kent_gpu_up gauge"; print "kent_gpu_up 1"
+          series("kent_gpu_temperature_celsius", "GPU core temperature")
+          series("kent_gpu_utilization_ratio", "GPU busy fraction (0-1)")
+          series("kent_gpu_power_watts", "GPU power draw")
+          series("kent_gpu_memory_used_bytes", "GPU memory in use")
+          series("kent_gpu_memory_total_bytes", "GPU memory installed")
+        }' <<<"$csv" > "$tmp"
+else
+    printf '# HELP kent_gpu_up 1 if nvidia-smi answered\n# TYPE kent_gpu_up gauge\nkent_gpu_up 0\n' > "$tmp"
+fi
+chmod 0644 "$tmp" && mv -f "$tmp" "$OUT"

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# kent-llama-wait — ExecStartPost of kent-llama.service: the start job finishes only once the model
+# is loaded and llama-server answers /health (bounded by the unit's TimeoutStartSec).
+set -uo pipefail
+while :; do
+    [[ "$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:8080/health)" == 200 ]] && exit 0
+    sleep 2
+done

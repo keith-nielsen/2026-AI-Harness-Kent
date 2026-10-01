@@ -2,14 +2,17 @@
 
 ## Supported Versions
 
-Kent is in pre-alpha development. No stable release has been published yet.
-Security patches will be applied to the main branch and communicated via
-GitHub Releases once available.
+Kent is at the v0.1.0 release-candidate stage. Security fixes go to `main` and
+the latest release candidate, and are announced in GitHub Releases.
 
 | Version | Supported |
 |---------|-----------|
-| main (bleeding edge) | ✅ Active development |
-| v0.1.0-prealpha | Future |
+| main | ✅ Active development |
+| v0.1.0-rc.x | ✅ Latest release candidate |
+
+Kent is a reference implementation, not a certified system. The controls in
+place, and the gaps to close before processing regulated data, are listed in
+[`docs/controls.md`](docs/controls.md).
 
 ## Reporting a Vulnerability
 
@@ -49,8 +52,9 @@ release notes once the fix is published (unless anonymity is requested).
 
 The following are in scope:
 
-- Kent agent code and templates
-- Installation scripts
+- Kent agent code, Gent runtime and templates
+- Install modules (`install/services/`) and their defaults
+- The gateway access policy (`kent_gateway.py`) and egress proxy rules
 - Configuration defaults
 - Documentation that, if followed, introduces a security risk
 

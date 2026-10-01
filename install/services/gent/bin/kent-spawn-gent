@@ -1,0 +1,221 @@
+#!/usr/bin/python3 -I
+"""kent-spawn-gent <stack_id> <project_dir>   (root; the kent account runs it via sudo)
+   kent-spawn-gent --recreate <stack_id>      replace the container with one on the
+                                              current image, keeping all Gent state
+
+Creates one isolated Gent:
+  - system account gent-<id> (own uid/gid, no login, no home)
+  - /var/lib/kent-gent/stacks/<id>/
+        data/     gent-<id>:kent  2750  stack.db, project/, workspace/ (Kent reads, never writes)
+        inbox/    kent:gent-<id>  2750  Kent's answers (mounted read-only; setgid, so the files Kent
+                                        writes get the Gent's group and the Gent can read them)
+  - gateway key: /etc/kent/litellm/gent-keys/<id>.key (identity gent-<id>, local tiers only)
+                 /var/lib/kent-gent/keys/<id>.key      (mounted read-only into the container)
+  - private Gitea repo kent/gent-<id> (created with admin rights; Kent's token pushes to it)
+  - container kent-gent-<id> on the internal network kent-gent-net: read-only rootfs,
+    no capabilities, no-new-privileges, resource limits, logs to journald.
+
+<project_dir> is read, never trusted: only regular, non-symlink files named
+project.yaml, agents.yaml, tasks.yaml and (optional) LEARNINGS.md are copied,
+each at most 256 KiB. Prints a JSON summary on success.
+"""
+import base64
+import grp
+import hashlib
+import json
+import os
+import pwd
+import re
+import secrets
+import shutil
+import sqlite3
+import stat
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+ROOT = Path("/var/lib/kent-gent")
+STACKS = ROOT / "stacks"
+KEYS = ROOT / "keys"
+REGISTRY = ROOT / "registry"
+GW_KEYS = Path("/etc/kent/litellm/gent-keys")
+SCHEMA = Path("/opt/kent-gent/share/stack.sql")
+IMAGE = "kent-gent:current"
+NETWORK = "kent-gent-net"
+BRIDGE_IP = "172.30.0.1"
+GITEA = "http://127.0.0.1:3000"
+GITEA_ADMIN_PW = Path("/etc/kent/gitea/credentials/admin_password")
+PROJECT_FILES = {"project.yaml": True, "agents.yaml": True, "tasks.yaml": True, "LEARNINGS.md": False}
+MAX_FILE = 256 * 1024
+
+
+def die(msg: str) -> None:
+    print(f"kent-spawn-gent: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def run(*cmd: str) -> str:
+    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def read_untrusted(path: Path) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            die(f"{path.name}: not a regular file")
+        if st.st_size > MAX_FILE:
+            die(f"{path.name}: larger than {MAX_FILE} bytes")
+        return os.read(fd, MAX_FILE + 1)[:MAX_FILE]
+    finally:
+        os.close(fd)
+
+
+def write(path: Path, data: bytes, mode: int, uid: int, gid: int) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.chown(path, uid, gid)
+    os.chmod(path, mode)
+
+
+def mkdir(path: Path, mode: int, uid: int, gid: int) -> None:
+    path.mkdir(mode=0o700)
+    os.chown(path, uid, gid)
+    os.chmod(path, mode)
+
+
+def gitea_create_repo(sid: str) -> str:
+    pw = GITEA_ADMIN_PW.read_text().strip()
+    auth = base64.b64encode(f"kentadmin:{pw}".encode()).decode()
+    body = json.dumps({"name": f"gent-{sid}", "private": True, "auto_init": True, "default_branch": "main",
+                       "description": f"Gent {sid} workspace (published by Kent)"}).encode()
+    req = urllib.request.Request(f"{GITEA}/api/v1/admin/users/kent/repos", data=body, method="POST",
+                                 headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)["full_name"]
+
+
+def start_container(sid: str, uid: int, gid: int) -> str:
+    stack = STACKS / sid
+    data = stack / "data"
+    return run(
+        "docker", "run", "-d", "--name", f"kent-gent-{sid}", "--hostname", f"gent-{sid}",
+        "--label", f"kent.stack={sid}", "--network", NETWORK,
+        "--user", f"{uid}:{gid}", "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--pids-limit", "256", "--memory", "2g", "--cpus", "2", "--init",
+        "--restart", "on-failure:3",
+        "--log-driver", "journald", "--log-opt", f"tag=kent-gent-{sid}",
+        "-v", f"{data}:/data", "-v", f"{stack / 'inbox'}:/inbox:ro",
+        "-v", f"{KEYS / (sid + '.key')}:/run/kent/gent_key:ro",
+        "-e", f"STACK_ID={sid}", "-e", f"GATEWAY_URL=http://{BRIDGE_IP}:4000/v1",
+        "-e", f"HTTP_PROXY=http://{BRIDGE_IP}:3129", "-e", f"HTTPS_PROXY=http://{BRIDGE_IP}:3129",
+        "-e", f"http_proxy=http://{BRIDGE_IP}:3129", "-e", f"https_proxy=http://{BRIDGE_IP}:3129",
+        "-e", f"NO_PROXY={BRIDGE_IP}", "-e", f"no_proxy={BRIDGE_IP}",
+        "-e", f"SEARXNG_URL=http://{BRIDGE_IP}:8888",
+        IMAGE,
+    )
+
+
+def recreate(sid: str) -> None:
+    reg = REGISTRY / sid
+    if not reg.is_file() or not (STACKS / sid / "data").is_dir():
+        die(f"stack {sid} is not an active Kent-spawned Gent")
+    user = f"gent-{sid}"
+    uid, gid = pwd.getpwnam(user).pw_uid, grp.getgrnam(user).gr_gid
+    subprocess.run(["docker", "rm", "-f", f"kent-gent-{sid}"], capture_output=True)
+    cid = start_container(sid, uid, gid)
+    subprocess.run(["logger", "-t", "kent-install", f"gent: recreated {user} container={cid[:12]}"], check=False)
+    print(json.dumps({"stack_id": sid, "container": cid[:12], "recreated": True}))
+
+
+def main() -> None:
+    if os.geteuid() != 0:
+        die("must run as root (sudo)")
+    if len(sys.argv) == 3 and sys.argv[1] == "--recreate":
+        if not re.fullmatch(r"[0-9a-f]{8}", sys.argv[2]):
+            die("stack_id must be 8 lowercase hex characters")
+        return recreate(sys.argv[2])
+    if len(sys.argv) != 3:
+        die("usage: kent-spawn-gent <stack_id: 8 hex> <project_dir> | --recreate <stack_id>")
+    sid, project_dir = sys.argv[1], Path(sys.argv[2])
+    if not re.fullmatch(r"[0-9a-f]{8}", sid):
+        die("stack_id must be 8 lowercase hex characters")
+    op = os.environ.get("SUDO_USER", "")
+    if op != "kent":
+        die("only the kent account may spawn Gents (run via: kent new ...)")
+    op_pw = pwd.getpwnam(op)
+    user = f"gent-{sid}"
+    try:
+        pwd.getpwnam(user)
+        die(f"account {user} already exists")
+    except KeyError:
+        pass
+    try:
+        grp.getgrnam(user)
+        die(f"group {user} already exists")
+    except KeyError:
+        pass
+    stack = STACKS / sid
+    if stack.exists() or (REGISTRY / sid).exists():
+        die(f"stack {sid} already exists")
+
+    # Architecture §17.3: halt spawning at 90% disk.
+    du = shutil.disk_usage(ROOT)
+    if du.used / du.total >= 0.90:
+        die(f"refusing to spawn: {ROOT} filesystem is {du.used / du.total:.0%} full (limit 90%)")
+
+    # Read the operator's project files before creating anything.
+    files = {}
+    for name, required in PROJECT_FILES.items():
+        p = project_dir / name
+        if not os.path.lexists(p):
+            if required:
+                die(f"missing {name} in {project_dir}")
+            continue
+        files[name] = read_untrusted(p)
+
+    # Registry first: from here on, kent-destroy-gent can clean up a partial spawn.
+    (REGISTRY / sid).write_text(json.dumps({"stack_id": sid, "user": user, "operator": op}) + "\n")
+    run("useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent",
+        "--shell", "/usr/sbin/nologin", "--comment", f"Kent Gent {sid}", user)
+    uid, gid = pwd.getpwnam(user).pw_uid, grp.getgrnam(user).gr_gid
+    op_gid = op_pw.pw_gid
+
+    mkdir(stack, 0o755, 0, 0)
+    data = stack / "data"
+    mkdir(data, 0o2750, uid, op_gid)
+    for sub in ("project", "workspace"):
+        mkdir(data / sub, 0o2750, uid, op_gid)
+    # setgid: Kent (not in the Gent's group) writes the answers; without it they got group kent
+    # and the Gent could not read them (2026-09-30: "Permission denied: /inbox/escalation-1.json").
+    mkdir(stack / "inbox", 0o2750, op_pw.pw_uid, gid)
+    for name, content in files.items():
+        write(data / "project" / name, content, 0o640, uid, op_gid)
+
+    db = data / "stack.db"
+    con = sqlite3.connect(db)
+    con.executescript(SCHEMA.read_text())
+    con.close()
+    os.chown(db, uid, op_gid)
+    os.chmod(db, 0o640)
+
+    key = "sk-kent-gent-" + secrets.token_urlsafe(32)
+    write(KEYS / f"{sid}.key", key.encode(), 0o440, 0, gid)
+    write(GW_KEYS / f"{sid}.key", key.encode(), 0o640, 0, grp.getgrnam("litellm").gr_gid)
+    key_hash = hashlib.sha256(key.encode()).hexdigest()
+    del key
+
+    repo = gitea_create_repo(sid)
+
+    cid = start_container(sid, uid, gid)
+    subprocess.run(["logger", "-t", "kent-install", f"gent: spawned {user} uid={uid} container={cid[:12]}"], check=False)
+    print(json.dumps({"stack_id": sid, "unix_user": user, "unix_uid": uid, "container": cid[:12],
+                      "gitea_repo": repo, "gateway_key_sha256": key_hash,
+                      "data": str(data), "inbox": str(stack / "inbox")}))
+
+
+if __name__ == "__main__":
+    main()

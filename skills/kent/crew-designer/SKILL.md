@@ -80,15 +80,14 @@ Select the closest matching template from the table above. Then customise:
 
 3. **Customise task descriptions** with the operator's actual inputs, sources, and success criteria. Fill in concrete details, not placeholders.
 
-4. **Select process type**:
-   - `sequential` for pipelines where each agent builds on the previous output (most common, 2-3 agents)
-   - `hierarchical` for complex tasks where a manager delegates subtasks (4+ agents, higher token cost)
+4. **Order the tasks**: the Gent CEO runs tasks one at a time in `tasks.yaml` order,
+   and each task sees the results of the earlier ones. Put dependencies first.
 
-5. **Assign model tiers**:
-   - Workers default to `fast` for the research template, `smart` for content and analysis
-   - Manager (hierarchical only) always uses `smart`
-   - Reviewer agents use `smart` regardless of template
-   - If the operator says "use frontier" or the task clearly exceeds local capability, note this as requiring escalation
+5. **Plan for the local model**: every Gent worker runs on the local `fast` tier; Gents
+   cannot use smart or frontier. Keep each task small and concrete, with one deliverable
+   named in `output:` (see "Spawning"). Where a task needs expert judgement a small model is likely to get wrong
+   (licensing, security-critical choices, novel design), mark it `escalate: true` with a
+   precise `question`: you (Kent) will answer it on frontier before the team starts.
 
 ### Phase 3: Design Review
 
@@ -100,8 +99,8 @@ TEMPLATE: <template_name> (customised)
 PROCESS: <sequential|hierarchical>
 
 AGENTS:
-  1. <Role> — <Goal summary> [tier: fast|smart]
-  2. <Role> — <Goal summary> [tier: fast|smart]
+  1. <Role> — <Goal summary>
+  2. <Role> — <Goal summary>
   ...
 
 TASK PIPELINE:
@@ -112,7 +111,8 @@ TASK PIPELINE:
       Expected output: <what good looks like>
   ...
 
-ESTIMATED COST: <low|medium|high> (based on agent count and tiers)
+ESCALATIONS: <tasks marked escalate: true, with the question> (frontier, via Kent)
+EFFORT: <limits: max_iter / max_tokens> (keep small on local hardware)
 ```
 
 Do NOT show raw YAML at this stage. The operator should approve the design before seeing config files.
@@ -132,17 +132,20 @@ On approval, generate the crew configuration files:
      --template <template_name> \
      --output-dir <staging_dir> \
      --project-name "<operator's project name>" \
+     --goal "<the deliverable and who uses it>" \
      --customisations '<JSON string of customisations>'
    ```
 
 2. The script produces:
+   - `project.yaml` — name, goal and effort limits (required by `kent-gent spawn`)
    - `agents.yaml` — customised agent definitions
    - `tasks.yaml` — customised task definitions
-   - `crew_config.json` — metadata (template, process type, tier assignments, timestamp)
+   - `crew_config.json` — metadata (template, process type, timestamp)
 
 3. Show the operator the generated file paths and offer to display the YAML for final review.
 
-4. If the operator approves for spawn, report that the configs are staged and ready. The actual spawn is a separate operation (spawn-gent script reads from the staging directory).
+4. If the operator approves, spawn it: `kent-gent spawn --name "<name>" --project <staging_dir>`,
+   then report the stack id (see "Spawning" below).
 
 ## Template Details
 
@@ -154,7 +157,7 @@ Best for fact-finding, source validation, and structured summaries.
 - **Reviewer**: Validates the final output for accuracy and completeness
 
 Process: sequential (Researcher → Analyst → Reviewer)
-Default tier: fast for Researcher, smart for Analyst and Reviewer
+All workers run on the local fast tier (Gents are local-only)
 
 ### Content Template
 Best for producing written deliverables: reports, articles, briefs.
@@ -164,7 +167,7 @@ Best for producing written deliverables: reports, articles, briefs.
 - **Editor**: Reviews for clarity, accuracy, tone, and completeness
 
 Process: sequential (Researcher → Writer → Editor)
-Default tier: smart for all agents (writing quality matters)
+All workers run on the local fast tier; escalate genuinely hard writing decisions
 
 ### Analysis Template
 Best for data-driven insights from structured or semi-structured data.
@@ -175,14 +178,15 @@ Best for data-driven insights from structured or semi-structured data.
 - **Reviewer**: Validates methodology, checks calculations, flags limitations
 
 Process: hierarchical (Analyst manages, delegates to Collector and Writer, Reviewer validates)
-Default tier: fast for Collector, smart for Analyst/Writer/Reviewer
+All workers run on the local fast tier. The Gent CEO runs tasks sequentially, so list them in order
 
 ## Pitfalls
 
 - **Over-engineering**: Resist the urge to add agents. Start with the template's default count. The operator can always iterate.
 - **Vague goals**: If the operator says "research AI", push back. Get a specific deliverable: "a 2-page summary of transformer architecture advances in 2025 with source citations."
 - **Missing inputs**: A crew with no input data will hallucinate. Confirm what sources are available before designing.
-- **Frontier assumptions**: Never default to frontier tier. It costs real money and requires escalation. Only flag it if the operator explicitly requests it or the task clearly exceeds smart-tier capability.
+- **Frontier assumptions**: Gents never call frontier. Use `escalate: true` sparingly (budget: 5 per Gent per day); each one is a frontier call made by you.
+- **Oversized tasks**: the local model is slow. Several small tasks beat one big one.
 - **Premature YAML**: Don't dump YAML at the operator. Present the human-readable design first. YAML is the output artifact, not the communication medium.
 
 ## Verification
@@ -193,3 +197,61 @@ After generation, verify:
 3. Task count matches the approved pipeline
 4. Process type matches the approved design
 5. No placeholder text remains (no `<fill in>` or `TODO` strings)
+
+
+## Spawning (kent-gent)
+
+After the operator approves the design, write three files into a new directory
+(e.g. `/tmp/kent-crew-staging/<short-name>/`) and spawn:
+
+`project.yaml`
+```yaml
+name: "Short project name"
+goal: "One or two sentences: the deliverable and who uses it"
+```
+
+`project.yaml` may add `limits: {max_iter: 6, max_tokens: 4000}` (the defaults; keep tasks small — the local model is slow).
+
+`agents.yaml` — one entry per worker (key -> role, goal, backstory). Keep it to 2-4 agents.
+
+`tasks.yaml` — ordered; each task runs as its own crew step and sees earlier results:
+```yaml
+research:
+  agent: researcher                 # key from agents.yaml
+  description: "What to do, concretely. Name the files to write in /data/workspace."
+  expected_output: "What 'done' looks like"
+build:
+  agent: developer
+  description: "..."
+  expected_output: "..."
+  escalate: true                    # optional: ask Kent (frontier) before starting
+  question: "The precise expert question"   # optional, used with escalate
+write:
+  agent: writer
+  description: "..."
+  expected_output: "..."
+  output: paper.md                  # the task's one deliverable, relative to /data/workspace
+  max_tokens: 6000                  # optional: longer replies for this task (cap 16000)
+review:
+  agent: reviewer
+  description: "Check each deliverable against its task. One line per file; last line: Overall: PASS or Overall: FAIL."
+  expected_output: "review.md ending with Overall: PASS or Overall: FAIL"
+  output: review.md
+  verdict: true                     # its overall PASS/FAIL is reported to Kent
+```
+
+Rules that make tasks succeed on the local model:
+- **One deliverable per task, named in `output:`.** Small models often put the deliverable in
+  their final answer instead of calling Write File; with `output:` the Gent saves that answer
+  as the file, so the task does not fail on a missing file.
+- **Ask for terse content**: 2-3 sentences per finding or section item, not paragraphs; a long
+  answer is cut off at `max_tokens`.
+- **End with a review task marked `verdict: true`** whose deliverable's last line is `Overall: PASS`
+  or `Overall: FAIL`. The Gent reports that one word to Kent (never the review's text), and it
+  appears in the operator's notice next to Kent's own frontier review.
+- **Raise `max_tokens` only for writing tasks** whose deliverable is long (a ~1500-word paper
+  needs about 3000 tokens plus headroom: 6000).
+
+Then run: `kent-gent spawn --name "<name>" --project <dir>` and report the stack id.
+Follow progress with `kent-gent status <id>`; when it is complete run
+`kent-gent assess <id>` and summarise the assessment for the operator.

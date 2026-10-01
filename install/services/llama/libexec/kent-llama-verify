@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# kent-llama-verify — ExecStartPre of kent-llama.service: refuse to start unless the model files the
+# settings select match the SHA-256 recorded at install time (/etc/kent/llama/models.sha256).
+set -euo pipefail
+SUMS=/etc/kent/llama/models.sha256
+mapfile -t files < <(/opt/kent-llama/libexec/kent-llama-launch --files)
+for f in "${files[@]}"; do
+    want="$(awk -v n="$(basename "$f")" '$2 == n { print $1 }' "$SUMS")"
+    [[ -n "$want" ]] || { echo "kent-llama-verify: $(basename "$f") is not in $SUMS (add it with: sudo ./kent-admin models rehash)" >&2; exit 1; }
+    got="$(sha256sum "$f" | cut -d' ' -f1)"
+    [[ "$got" == "$want" ]] || { echo "kent-llama-verify: SHA-256 mismatch for $f; refusing to load it" >&2; exit 1; }
+    echo "verified $(basename "$f")"
+done

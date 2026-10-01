@@ -1,0 +1,60 @@
+# Kent's Hermes — managed (administrator-pinned) policy, common to every profile.
+# Rendered by install/services/hermes/install.sh together with profile-<name>.yaml into
+# /etc/kent/hermes/managed/config.yaml (root:kent 0640). Hermes deep-merges these values ON TOP
+# of Kent's own config, so Kent cannot change any key set here. See docs/design/operator-experience.md §11.
+
+model:                                  # all inference through the Kent gateway
+  provider: custom
+  base_url: http://127.0.0.1:4000/v1
+  default: auto                         # the router classifies every request
+  key_env: KENT_GATEWAY_KEY             # value comes from the managed .env
+  context_length: 262144
+
+auxiliary:                              # helper calls also go through the gateway (logged, authorised)
+  compression:
+    provider: custom
+    base_url: http://127.0.0.1:4000/v1
+    model: fast
+    key_env: KENT_GATEWAY_KEY
+  title_generation:
+    enabled: false
+
+updates:
+  check: false                          # pinned install: no update checks, upgrades via kent-admin
+
+security:
+  redact_secrets: true
+  tirith_enabled: true                  # pre-exec command scanner (also pinned in the managed .env)
+  tirith_path: /opt/kent-hermes/bin/tirith   # explicit path: Hermes never auto-downloads
+  tirith_timeout: 5
+  tirith_fail_open: true                # lab; hardened fails closed
+
+web:
+  backend: searxng
+  search_backend: searxng
+  use_gateway: false
+  base_url: http://127.0.0.1:8888      # Kent's SearXNG (install/services/searxng)
+  keyless_fallback: false               # never retry failed web calls via anonymous outside vendors
+                                        # (Exa/Parallel/Firecrawl/Keenable): that bypasses SearXNG and logging
+
+browser:
+  cloud_provider: local
+  use_gateway: false
+
+approvals:
+  single_query_mode: deny               # `kent -q`: dangerous commands are refused, never run unasked
+  cron_mode: deny
+  deny:                                 # never, not even with --yolo: approval bypass and policy escape
+    - "*hermes* -z*"
+    - "*hermes*--oneshot*"
+    - "*hermes*--yolo*"
+    - "*hermes_yolo_mode*"
+    - "*hermes_managed_dir*"
+    - "*docker *"
+    - "*/etc/kent/*credentials*"
+    - "*/etc/kent/hermes/managed*"
+
+hooks:                                  # consent: the Hermes installer allowlists exactly this command
+  pre_llm_call:                         # Kent's unread notices about Gents (finished, failed, halted, stuck)
+    - command: /opt/kent-core/bin/kent_notices_hook.py
+      timeout: 5

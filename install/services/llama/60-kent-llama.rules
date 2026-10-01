@@ -1,0 +1,12 @@
+// /etc/polkit-1/rules.d/60-kent-llama.rules — installed by install/services/llama/install.sh.
+// Members of kent-operators may start, stop and restart the local model server, and nothing
+// else: not other units, and not enable/mask/edit this one. The kent account and Gent accounts
+// are never members of kent-operators. `kent llama start|stop` relies on this rule.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "kent-llama.service" &&
+        ["start", "stop", "restart"].indexOf(action.lookup("verb")) >= 0 &&
+        subject.isInGroup("kent-operators") && subject.user != "kent") {
+        return polkit.Result.YES;
+    }
+});

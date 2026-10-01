@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# kent-llama-tuning apply|restore — the system settings the measured llama.cpp configuration
+# assumes (SMT off: +3.6% throughput and far lower variance; CPU boost off: peak 93C -> 74C for
+# ~1.6%). Runs as root from kent-llama-tuning.service; `restore` puts back what `apply` found.
+set -euo pipefail
+SMT=/sys/devices/system/cpu/smt/control; BOOST=/sys/devices/system/cpu/cpufreq/boost
+PREV=/run/kent-llama-tuning/prev
+case "${1:-}" in
+    apply)
+        [[ "${TUNE:-1}" == 1 ]] || { echo "tuning disabled (TUNE=${TUNE})"; exit 0; }
+        printf 'smt=%s\nboost=%s\n' "$(cat "$SMT" 2>/dev/null)" "$(cat "$BOOST" 2>/dev/null)" > "$PREV"
+        [[ -w "$SMT" ]] && { [[ "$(cat "$SMT")" == off ]] || echo off > "$SMT"; }
+        [[ -w "$BOOST" ]] && { [[ "$(cat "$BOOST")" == 0 ]] || echo 0 > "$BOOST"; }
+        echo "applied: smt=$(cat "$SMT" 2>/dev/null) boost=$(cat "$BOOST" 2>/dev/null) (was: $(paste -sd' ' "$PREV"))"
+        ;;
+    restore)
+        [[ -f "$PREV" ]] || exit 0
+        smt="$(sed -n 's/^smt=//p' "$PREV")"; boost="$(sed -n 's/^boost=//p' "$PREV")"
+        # "notsupported"/"forceoff" cannot be written back; only on/off are restored.
+        [[ "$smt" == on || "$smt" == off ]] && [[ "$(cat "$SMT")" != "$smt" ]] && echo "$smt" > "$SMT"
+        [[ "$boost" == 0 || "$boost" == 1 ]] && [[ "$(cat "$BOOST")" != "$boost" ]] && echo "$boost" > "$BOOST"
+        echo "restored: smt=$(cat "$SMT" 2>/dev/null) boost=$(cat "$BOOST" 2>/dev/null)"
+        ;;
+    *) echo "usage: kent-llama-tuning apply|restore" >&2; exit 2 ;;
+esac

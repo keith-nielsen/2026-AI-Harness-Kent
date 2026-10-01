@@ -1,0 +1,50 @@
+#!/usr/bin/python3 -I
+"""kent-gent-ctl <inspect|logs|stop|start> <stack_id> [lines]   (root; the kent account runs it via sudo)
+
+Container operations on one Kent-spawned Gent, so Kent itself needs no Docker access
+(membership of the docker group is root-equivalent). Only containers of Gents listed in
+/var/lib/kent-gent/registry (created by kent-spawn-gent) can be addressed, and only these
+four actions exist.
+"""
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REGISTRY = Path("/var/lib/kent-gent/registry")
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"kent-gent-ctl: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if len(args) not in (2, 3) or args[0] not in ("inspect", "logs", "stop", "start"):
+        die("usage: kent-gent-ctl <inspect|logs|stop|start> <stack_id> [lines]", 2)
+    action, sid = args[0], args[1]
+    if not re.fullmatch(r"[0-9a-f]{8}", sid):
+        die("stack_id must be 8 lowercase hex characters", 2)
+    if not (REGISTRY / sid).is_file():
+        die(f"stack {sid} is not a Kent-spawned Gent")
+    name = f"kent-gent-{sid}"
+    if action == "inspect":
+        cmd = ["docker", "inspect", "-f", "{{.State.Status}} exit={{.State.ExitCode}}", name]
+    elif action == "logs":
+        lines = args[2] if len(args) == 3 else "100"
+        if not lines.isdigit() or not 1 <= int(lines) <= 5000:
+            die("lines must be 1-5000", 2)
+        cmd = ["docker", "logs", "--tail", lines, name]
+    elif action == "stop":
+        cmd = ["docker", "stop", "-t", "30", name]
+    else:
+        cmd = ["docker", "start", name]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    sys.exit(r.returncode)
+
+
+if __name__ == "__main__":
+    main()

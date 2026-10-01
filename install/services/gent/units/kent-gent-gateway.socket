@@ -1,0 +1,11 @@
+[Unit]
+Description=Kent Gent bridge -> LLM gateway (172.30.0.1:4000)
+After=docker.service
+
+[Socket]
+ListenStream=172.30.0.1:4000
+FreeBind=yes
+NoDelay=yes
+
+[Install]
+WantedBy=sockets.target

@@ -189,3 +189,60 @@ CREATE INDEX IF NOT EXISTS idx_telem_model ON inference_telemetry(model_logical,
 CREATE INDEX IF NOT EXISTS idx_frontier_provider ON frontier_log(provider, timestamp);
 CREATE INDEX IF NOT EXISTS idx_egress_flagged ON egress_telemetry(flagged, timestamp);
 CREATE INDEX IF NOT EXISTS idx_stack_telem ON stack_telemetry(stack_id, timestamp);
+
+-- Kent's evaluation of Gent-published learnings. Kent only READS each Gent's
+-- stack.db (shared_learnings); its verdicts live here, keyed by (stack, id).
+CREATE TABLE IF NOT EXISTS learning_reviews (
+    stack_id TEXT NOT NULL,
+    learning_id INTEGER NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    verdict TEXT NOT NULL,                  -- adopt, discard, escalate
+    confidence REAL,
+    notes TEXT,
+    reviewer_tier TEXT,                     -- gateway tier that produced the verdict
+    PRIMARY KEY (stack_id, learning_id)
+);
+
+-- Kent's assessment of a finished Gent project (kent-gent assess).
+CREATE TABLE IF NOT EXISTS gent_assessments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stack_id TEXT NOT NULL REFERENCES stack_registry(stack_id),
+    assessed_at TEXT NOT NULL,
+    usefulness INTEGER,                     -- 1 (useless) .. 5 (production-ready)
+    verdict TEXT NOT NULL,                  -- accept, revise, reject
+    strengths TEXT,
+    weaknesses TEXT,
+    notes TEXT,
+    reviewer_tier TEXT NOT NULL,
+    published_commit TEXT,                  -- Gitea commit of the published workspace
+    details TEXT                            -- JSON: per-task results and issues (frontier review)
+);
+
+-- Gent events, copied by kent-poll-learnings from each Gent's stack.db (events table).
+CREATE TABLE IF NOT EXISTS gent_events (
+    stack_id TEXT NOT NULL,
+    event_id INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    task_id TEXT,
+    summary TEXT,                           -- Gent-authored: untrusted
+    detail TEXT,                            -- Gent-authored JSON: untrusted
+    ingested_at TEXT NOT NULL,
+    PRIMARY KEY (stack_id, event_id)
+);
+
+-- Notices for the operators and for Kent's chat, written by Kent from structured fields only
+-- (never Gent free text). Shown by `kent` (chat start, status, notices) and Kent's pre-turn hook.
+CREATE TABLE IF NOT EXISTS notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    stack_id TEXT,
+    kind TEXT NOT NULL,                     -- project_complete, task_failed, halted, stuck
+    text TEXT NOT NULL
+);
+
+-- How far each reader has read: an operator's account name, or "kent-chat" for Kent himself.
+CREATE TABLE IF NOT EXISTS notice_reads (
+    reader TEXT PRIMARY KEY,
+    last_id INTEGER NOT NULL
+);

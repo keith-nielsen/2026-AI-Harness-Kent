@@ -1,0 +1,87 @@
+#!/usr/bin/python3 -I
+"""kent-destroy-gent <stack_id> [--archive]   (root; the kent account runs it via sudo)
+
+Removes everything kent-spawn-gent created for one Gent: container, gateway key
+(access revoked immediately), mounted key, account gent-<id>. Stack data is
+deleted, or with --archive moved to /var/lib/kent-gent/archive/<id>/ and handed to
+root:kent read-only so Kent can keep reading it. The Gitea repo
+kent/gent-<id> is kept as the permanent record.
+
+Only stacks listed in /var/lib/kent-gent/registry (i.e. created by
+kent-spawn-gent) are touched; any other account is never deleted.
+"""
+import json
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path("/var/lib/kent-gent")
+GW_KEYS = Path("/etc/kent/litellm/gent-keys")
+
+
+def die(msg: str) -> None:
+    print(f"kent-destroy-gent: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def main() -> None:
+    if os.geteuid() != 0:
+        die("must run as root (sudo)")
+    args = sys.argv[1:]
+    archive = "--archive" in args
+    args = [a for a in args if a != "--archive"]
+    if len(args) != 1 or not re.fullmatch(r"[0-9a-f]{8}", args[0]):
+        die("usage: kent-destroy-gent <stack_id: 8 hex> [--archive]")
+    sid = args[0]
+    reg = ROOT / "registry" / sid
+    if not reg.is_file():
+        die(f"stack {sid} is not a Kent-spawned Gent (no registry entry)")
+    info = json.loads(reg.read_text())
+    user = f"gent-{sid}"
+    if info.get("user") != user:
+        die("registry entry does not match")
+
+    # Revoke gateway access first, then stop the workload.
+    for k in (GW_KEYS / f"{sid}.key", ROOT / "keys" / f"{sid}.key"):
+        k.unlink(missing_ok=True)
+    subprocess.run(["docker", "rm", "-f", f"kent-gent-{sid}"], capture_output=True)
+
+    stack = ROOT / "stacks" / sid
+    result = {"stack_id": sid, "archived": None}
+    if stack.exists():
+        if archive:
+            dest = ROOT / "archive" / sid
+            dest.parent.mkdir(mode=0o755, exist_ok=True)
+            if dest.exists():
+                die(f"archive {dest} already exists")
+            op_gid = pwd.getpwnam("kent").pw_gid
+            stack.rename(dest)
+            for dirpath, dirnames, filenames in os.walk(dest):
+                os.chown(dirpath, 0, op_gid, follow_symlinks=False)
+                os.chmod(dirpath, 0o750)
+                for f in filenames:
+                    p = os.path.join(dirpath, f)
+                    os.chown(p, 0, op_gid, follow_symlinks=False)
+                    if not os.path.islink(p):
+                        os.chmod(p, 0o640)
+            result["archived"] = str(dest)
+        else:
+            shutil.rmtree(stack)
+
+    try:
+        pwd.getpwnam(user)
+        subprocess.run(["userdel", user], check=True)
+    except KeyError:
+        pass
+    subprocess.run(["groupdel", user], capture_output=True)
+    reg.unlink()
+    subprocess.run(["logger", "-t", "kent-install", f"gent: destroyed {user} archived={result['archived']}"], check=False)
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()

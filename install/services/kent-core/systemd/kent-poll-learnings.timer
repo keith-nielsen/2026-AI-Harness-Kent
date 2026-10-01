@@ -1,0 +1,12 @@
+[Unit]
+Description=Kent: review Gent learnings and relay escalations (schedule)
+
+[Timer]
+# Calendar schedule: unlike OnBootSec/OnUnitActiveSec it re-arms whenever the timer
+# is (re)started, e.g. after a reinstall without a reboot.
+OnCalendar=*-*-* *:*:00
+RandomizedDelaySec=10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

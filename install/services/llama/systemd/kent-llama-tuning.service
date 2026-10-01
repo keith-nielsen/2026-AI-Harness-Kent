@@ -1,0 +1,38 @@
+# /etc/systemd/system/kent-llama-tuning.service
+# System settings for the measured llama.cpp configuration (SMT off, CPU boost off), applied as root
+# when kent-llama.service starts and restored to what was there before when it stops (PartOf).
+# Installed by install/services/llama/install.sh. The model server itself never needs privilege.
+
+[Unit]
+Description=Kent local model server: CPU tuning (SMT, boost)
+PartOf=kent-llama.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/kent/llama/llama.env
+RuntimeDirectory=kent-llama-tuning
+RuntimeDirectoryMode=0700
+ExecStart=/opt/kent-llama/libexec/kent-llama-tuning apply
+ExecStop=/opt/kent-llama/libexec/kent-llama-tuning restore
+# Writes only to /sys/devices/system/cpu; everything else is locked down.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077

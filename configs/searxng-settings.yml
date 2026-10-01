@@ -1,0 +1,24 @@
+# /etc/kent/searxng/settings.yml — Kent's SearXNG (installed by install/services/searxng).
+# Seeded from the operator's earlier settings. The secret key is not stored here; it is passed
+# as SEARXNG_SECRET from /etc/kent/searxng/credentials (root only).
+use_default_settings: true
+general:
+  instance_name: "Kent search"
+  enable_metrics: false
+server:
+  bind_address: "0.0.0.0"          # inside the container; published on 127.0.0.1 only
+  port: 8080
+  limiter: false                   # loopback / Gent-bridge clients only
+  image_proxy: false
+  public_instance: false
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+outgoing:
+  request_timeout: 3.0
+  max_request_timeout: 10.0
+  useragent_suffix: "searxng"
