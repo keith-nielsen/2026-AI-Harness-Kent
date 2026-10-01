@@ -1,6 +1,118 @@
 # Resume card — Kent harness
 
-## START HERE — 2026-09-30 ~16:00 +08 (session restart; v0.1.0 final in progress)
+## START HERE — 2026-10-02 ~00:30 +08 (session restart; model bake-off pilot running)
+
+**Running right now (detached, survives the restart):** user unit `kent-bench-campaign` →
+`tests/bench/campaign.sh pilot-v1 "occamy stock stock-q6 nemotron" "probes kent crews" pilot 1`
+(FINAL_OFF=1 FINAL_LLAMA=1: at the end it turns bench mode off and restarts kent-llama). Started 00:23,
+~11-12 h. Progress: `~/Documents/repo/bench/runs/pilot-v1/status.json` and `campaign.log`. Stop:
+`systemctl --user stop kent-bench-campaign` (cleanup restores the host; rerunning resumes). Results:
+`python3 tests/bench/report.py ~/Documents/repo/bench/runs/pilot-v1 --calibrate /tmp/cal.json`.
+
+**Bake-off (quality first; all models -ncmoe = every expert on CPU, 256k, 2 slots, -rea off, no mmproj)**
+- Stock Qwen3.6-35B-A3B UD-Q4_K_XL: probes 87/106 old set; Kent 15/16; g01 crew pass.
+- Carnice APEX-I-Quality: REJECTED by the operator (probes 69/106 vs stock 87; spirals: 1M+ tokens on easy
+  Kent items, ignored format rules, leaked a system-prompt secret). Partial data kept.
+- Occamy Q4_K_M: probes 88/115 (shared 83 vs stock 87); Kent 14/16 before the fixture outage (5 search
+  items invalid, set aside, re-running); echoed a planted "3.4.2 recalled" injection (b24).
+- Stock UD-Q6_K_XL (unsloth MTP repo, same recipe): fits (6.8 GB VRAM steady at 193k ctx; 24.8 GB RAM
+  free); 24.7 tok/s decode, 370 prefill (~84%/75% of Q4).
+- Nemotron-3.5-Lightning-30B-A3B: unsloth UD-Q4_K_XL will NOT load on llama.cpp b9971 (built-in MTP
+  layer: 417 tensors, loader knows 408). Using lmstudio-community Q4_K_M (no MTP, 52 blocks, -ncmoe 52):
+  4.4 GB VRAM (~3 GB spare), 28 tok/s, tools OK. License OpenMDW-1.1 (not reviewed).
+- Operator's rule: drop a model mid-run if clearly worse (sign split like Carnice's 15-0).
+
+**Bench (`tests/bench/`, untracked; items/fixtures/answers git-ignored: repo is PUBLIC)**
+- Ladder: categories T/I/R/H x levels 1-5; 115 probes (incl. t60-t72 tool-calling), 16 Kent tasks, 6
+  crews, 19 TB tasks tagged (suites/tb.py). Canary GUID kent-bench:c1192544-bfcf-467d-9077-a1d330395d2e.
+- Graders are code only; self-tests: `pytest tests/bench/test_*.py` (349 pass). Fix a grader → rescore
+  stored replies with `run.py regrade`, never re-ask.
+- Root part: `/opt/kent-bench/bin/kent-bench on|off|reset|status` via sudoers 93-kent-bench (I may run
+  those four); `golden` and `install-bench-tools.sh` need the operator; repo edits to benchmode.sh or
+  fixtures take effect only after the operator reruns the installer.
+- Bench mode now: closed internet (Squid allows only the fixture web; refusals logged), preflight checks
+  before any change, Kent home reset to golden (a74e3937…) before every Kent item, runner refuses Kent/crew
+  items unless bench on + fixture search answers.
+- IRT (irt.py): adaptive draft tier designed (start mid-ladder, narrow in); not wired into run.py yet.
+
+**Harness changes this session (uncommitted; commit only when asked)**
+- Change 6 fixed: `kent_gateway.py` repairs cut-off tool-call arguments in history (llama 500 loop);
+  unit + live tests (48 live pass).
+- kent.conf knobs: TEMPLATE_COMMITS=0 (poll-learnings reviews, never commits), NOTICE_LOOKBACK_HOURS
+  (0 in bench) — deployed via kent-core install.
+- `.gitignore`: tests/bench/{suites,fixtures,runs}.
+
+**Findings to remember**
+- Kent pays a router call (~4.2k tokens) on EVERY agent step (model `auto`) → ~30-40% prompt overhead.
+- Kent cannot read pages in bench (Hermes web_extract blocks private IPs; host doesn't resolve fixtures);
+  page-level research lives in S3 crews. Kent's own terminal can still reach the real internet directly.
+- Stopping a campaign can orphan a `kent -q` (runs as kent; runner can't kill it); cleanup now waits.
+- ~0 expert layers fit on GPU at 256k with margin (stock); ~3 at 128k (launcher's probe). Nemotron leaves
+  ~3 GB free. Performance tuning comes AFTER the quality pick.
+
+**Next (in order)**
+1. When the campaign ends: `report.py --calibrate` → per model x cat x level, tokens per solved item,
+   item difficulties; drop items that gave every model the same result; freeze bench v1 (hash in manifests).
+2. Wire the adaptive draft (irt.Adaptive) into run.py; parametric sealed variants of L3-L5 items.
+3. Scored runs on the short list: draft, then full (k=3 repeats → pass^3, flips); TB-Local subset via
+   ~/Documents/repo/bench/tb (Harbor 0.20.0 in the bench venv).
+4. Winner vs stock, then performance tuning (-ncmoe / context) for the winner.
+5. Frontier calibration of L5 needs Opus/DeepSeek runs on the dev split only (no keys yet).
+
+---
+
+## History: 2026-10-01 (session restart; superseded by START HERE above)
+
+**Repo**
+- Branch `release/v0.1.0`, pushed at `252fba8` (llama tuning `2be6d25` + card); CI green on PR #1.
+- **Uncommitted** (commit only when asked): `TODO.md` (new "To v0.2.0" section + router bake-off entry),
+  `docs/design/WHY.md` (staged, v2), `docs/design/WHY operator edits.md` (operator's raw edits, untracked),
+  `tests/perf/` (untracked: `llama_bench.py` load test, `llama_variant.sh` runner — `MODEL=<file>`
+  selects the GGUF, writes logs/JSON next to itself; `candidate-models.tsv` = repo, file, commit, SHA-256).
+
+**Host**
+- kent-llama **active** with `--parallel 2 -kvu -lv 1` (2 slots × 262144; ~31 tok/s single, ~18 each
+  concurrent). SMT off and boost 0 *were recorded as the originals* when it started, so both stay off
+  after `kent llama stop` (operator's choice for SMT; boost can be set back by hand).
+- **Oracle not running** (killed at the 2 h background limit); gateway still `sim-routed`, so
+  smart/frontier fail over to fast. Restart it only when a step needs it — don't hand the operator a
+  command for it.
+- Fine-tune candidates downloaded, hash-verified, 0444 in `/media/administrator/DATA/models`
+  (Q4_K_M, ~21.2 GB each): `ourbox35b-Q4_K_M.gguf` (FINAL-Bench; evolutionary expert merge, Korean-
+  focused, thinking model), `0GM-1.0-35B-A3B-0427.Q4_K_M.gguf` (mradermacher; "Preview"),
+  `occamy-1.0-Q4_K_M.gguf` (Accio-Lab official; agentic), `Carnice-Qwen3.6-MoE-35B-A3B-Q4_K_M.gguf`
+  (author; tuned for Hermes Agent). All Apache 2.0, Qwen3.6-35B-A3B base. No mmproj fetched (text-only
+  bake-off; the runner still passes Qwen's mmproj — drop `-mm` if a fine-tune rejects it).
+
+**Next (operator's agenda)**
+1. **Model bake-off** (fine-tunes vs stock): design pending. Caveats agreed: baseline is UD-Q4_K_XL vs
+   candidates' Q4_K_M (a stock Q4_K_M would be the fair baseline); test in Kent's mode (`-rea off`);
+   Occamy/Carnice fit Kent's agentic work best. Measure speed with `tests/perf` and quality with the
+   capability check (prompt in the 2026-09-30 section below) plus agentic tasks.
+2. **Router bake-off** (TODO.md, Features): shadow-mode A = ModernBERT-large-llm-router (binary →
+   calibrated thresholds), B = NVIDIA prompt-task-and-complexity-classifier (license check); read-only
+   LiteLLM *routing* plugin logs both beside the live LLM classifier (off the request path, catches all
+   errors); winner becomes a `classifier_type: custom` plugin. Today smart and frontier are both Opus, so
+   `auto` is effectively local-vs-cloud. Labelled set needs content capture.
+3. **v0.2.0 traceability** (TODO.md): trace correlation (OTel GenAI, Tempo), run manifest, record/
+   replay via the gateway. Agreed follow-ons from the survey: tool-call records (stack.db), capture
+   levels with digests (content never in Loki), deterministic scanners (cited URLs vs Squid log
+   first), signed run bundles (Ed25519/DSSE via a root broker; no public Sigstore/on-chain).
+4. **Injection/PII filter** idea (discussed, not in TODO): gateway guardrail; BERT-class classifier as
+   the gate, guard LLM only as untrusted second opinion; scan Gent escalation text (only Gent text that
+   reaches the cloud); shadow mode first; GPU has no room for an 8B guard on this box.
+5. **README "why" narrative**: parked; WHY.md v2 is the foundation (trust / capture / capability;
+   platforms tested vs expected). Draft myself, operator edits.
+6. Release steps for v0.1.0 still open: Anthropic key, merge PR #1, tag.
+
+**Working agreements (additions)**: no make-work — never hand the operator commands or questionnaires
+not needed right now; draft first, operator corrects. Background jobs die at 2 h: chunk long
+downloads/benchmarks or resume them. The auto-mode classifier may block `sudo -A` privileged steps (it allowed one, blocked the next)
+and sudoers changes — give the operator the one-line command when root is genuinely needed.
+
+---
+
+## History: 2026-09-30 ~16:00 +08 (session restart; v0.1.0 final in progress)
 
 **Where things stand**
 - Branch `release/v0.1.0`, last commit `8fdccd0` (rc.5 + card). **Everything below is uncommitted** (≈50 files:
