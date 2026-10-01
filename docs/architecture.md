@@ -1,12 +1,23 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.5
-date: 2026-09-30
+version: 3.2.6
+date: 2026-10-02
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.6
+    date: 2026-10-02
+    summary: >
+      The gateway repairs earlier tool calls whose arguments were cut off at the token
+      limit (invalid JSON): the local model server failed every later request with 500
+      "Failed to parse tool call arguments", so the agent looped until the task died.
+      They are replaced by a small valid marker and a `tool_history_repaired` event is
+      logged (unit and live tests). Two kent.conf settings for evaluation runs:
+      `TEMPLATE_COMMITS=0` (learnings are reviewed but never committed to the template)
+      and `NOTICE_LOOKBACK_HOURS` (how far back a new chat session's notices reach; 0 =
+      none from before the session).
   - version: 3.2.5
     date: 2026-09-30
     summary: >
@@ -422,6 +433,13 @@ back is one variable, `FALLBACK_TIMEOUT` (`/etc/kent/litellm/litellm.env`;
 configured**; short values are for testing only (see the warning at the top of
 `install/services/litellm/install.sh`).
 
+A reply cut off at its token limit in the middle of a tool call leaves invalid JSON in the
+call's arguments. The local model server cannot render such a history and fails every later
+request with 500 "Failed to parse tool call arguments", so the agent never sees its own tool
+error and the task dies. Before each call the gateway replaces any earlier tool-call arguments
+that are not a JSON object with a small valid marker (the client's tool error message is kept)
+and logs a `tool_history_repaired` event.
+
 ### 5.4 Cost Controls
 
 Only Kent and the operator can reach cloud tiers. Gent-driven frontier spend is
@@ -540,7 +558,8 @@ operator's other Python environments.
   [--all]` lists them. Kent's own chat gets them through a Hermes `pre_llm_call` shell hook
   (`kent_notices_hook.py`, managed policy; consent is an allowlist entry for exactly that command,
   not `hooks_auto_accept`): unread notices are added to that turn's user message, once per chat
-  session, a new session starting with the last 24 hours.
+  session, a new session starting with the last 24 hours (`NOTICE_LOOKBACK_HOURS` in kent.conf;
+  0 = only notices from after the session started, used by evaluation runs).
 - **Injection boundary**: notices reach Kent's model, so they are composed by Kent from
   structured fields only: event kind, a validated task id, plain file names (others are dropped
   and counted), the Gent's registry name and Kent's own assessment verdict. Gent summaries,
@@ -656,7 +675,8 @@ The content filter blocks commits that look like instructions to a model,
 shell substitutions or pipe-to-shell, URLs, credentials or encoded blobs, even if
 the judge adopted them: an adopted learning reaches every future Gent, so a
 poisoned one must not get in. The digest lists each day's template commits; any
-commit can be reverted in Gitea.
+commit can be reverted in Gitea. `TEMPLATE_COMMITS=0` in kent.conf keeps the review but
+commits nothing (the verdict notes say so); evaluation runs use it so the template stays fixed.
 
 Planned: pushing learnings to already-running Gents; giving the judge its past
 verdicts to avoid re-reviewing duplicates.

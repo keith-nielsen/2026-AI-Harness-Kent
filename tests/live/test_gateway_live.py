@@ -1,6 +1,8 @@
 """Live adversarial tests against a real LiteLLM process (see conftest.py)."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from conftest import KEYS, call, chat
@@ -153,3 +155,27 @@ def test_no_key_and_bad_key(canary):
     assert call(None, body=chat("fast")).status_code == 401
     assert call("sk-nope", body=chat("fast")).status_code == 401
     assert call(KEYS["gent"][:-2], body=chat("fast")).status_code == 401
+
+
+# --- Tool-call history repair: a reply cut off mid tool call must not 500 every later request ---
+def _cut_off_history():
+    return [{"role": "user", "content": "Write the CSV to data.py"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c9", "type": "function", "function": {
+                "name": "write_file", "arguments": '{"path": "data.py", "content": "rows = \\"\\"\\"date,site,cou'}}]},
+            {"role": "tool", "tool_call_id": "c9", "content": "Error: Failed to parse tool arguments as JSON."},
+            {"role": "user", "content": "Reply OK"}]
+
+
+def test_cut_off_tool_call_is_repaired_before_the_upstream(canary, env):
+    r = call(KEYS["kent"], body={"model": "smart", "max_tokens": 4, "messages": _cut_off_history()})
+    assert r.status_code == 200 and canary() == 1
+    sent = json.loads(json.loads(env["canary_log"].read_text().splitlines()[-1])["body"])
+    args = sent["messages"][1]["tool_calls"][0]["function"]["arguments"]
+    assert "_invalid_arguments" in json.loads(args)          # the upstream got valid JSON
+
+
+def test_cut_off_tool_call_no_longer_breaks_the_local_model(canary):
+    tools = [{"type": "function", "function": {"name": "write_file", "parameters": {"type": "object", "properties": {
+        "path": {"type": "string"}, "content": {"type": "string"}}}}}]
+    r = call(KEYS["gent"], body={"model": "fast", "max_tokens": 16, "messages": _cut_off_history(), "tools": tools})
+    assert r.status_code == 200, r.text[:300]                 # was 500 "Failed to parse tool call arguments"

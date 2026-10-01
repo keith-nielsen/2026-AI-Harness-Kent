@@ -6,7 +6,9 @@ knows what happened while nobody was talking to him.
 Contract (Hermes shell hooks): JSON payload on stdin (session_id, ...); stdout
 {"context": "..."} is added to that turn's user message, or nothing. Read state is kept per
 chat session (reader "kent-chat:<session>"), so a one-off `kent -q` or a background call does
-not use up a notice the operator's chat never saw; a new session starts with the last 24 hours.
+not use up a notice the operator's chat never saw; a new session starts with the last 24 hours
+(NOTICE_LOOKBACK_HOURS in kent.conf; 0 = only notices from after the session started, which
+evaluation runs use so one test item's notices never reach the next).
 Notices are written by Kent's relay from structured fields only (kentlib.add_notice), never
 from Gent free text. Any error: print nothing and exit 0, so the hook can never break a chat.
 """
@@ -23,11 +25,11 @@ import kentlib  # noqa: E402
 FIRST_LOOK_HOURS = 24
 
 
-def context_for(kdb, session: str) -> str:
+def context_for(kdb, session: str, hours: int = FIRST_LOOK_HOURS) -> str:
     reader = f"kent-chat:{session}"
     if kdb.execute("SELECT 1 FROM notice_reads WHERE reader=?", (reader,)).fetchone() is None:
         start = kdb.execute("SELECT COALESCE(MAX(id), 0) FROM notices WHERE created_at < datetime('now', ?)",
-                            (f"-{FIRST_LOOK_HOURS} hours",)).fetchone()[0]
+                            (f"-{hours} hours",)).fetchone()[0]
         kdb.execute("INSERT INTO notice_reads (reader, last_id) VALUES (?, ?)", (reader, start))
         kdb.commit()
     rows = kentlib.unread_notices(kdb, reader)
@@ -44,7 +46,9 @@ def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
         session = re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("session_id") or "none"))[:80]
-        ctx = context_for(kentlib.kent_db(kentlib.conf()), session)
+        c = kentlib.conf()
+        hours = int(c.get("NOTICE_LOOKBACK_HOURS", FIRST_LOOK_HOURS))
+        ctx = context_for(kentlib.kent_db(c), session, max(0, hours))
         if ctx:
             print(json.dumps({"context": ctx}))
     except Exception:  # noqa: BLE001 - never break Kent's chat over a notice

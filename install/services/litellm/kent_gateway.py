@@ -177,8 +177,45 @@ async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key=api_key, key_alias=identity, user_id=identity, models=models)
 
 
+def repair_tool_history(messages) -> int:
+    """Make earlier tool calls renderable: arguments that are not a JSON object are replaced, in place.
+
+    A reply cut off at max_tokens mid tool call leaves invalid JSON in `arguments`. The client
+    (CrewAI, Hermes) already answers it with a tool error, but llama-server cannot render a history
+    holding invalid JSON and fails every later request with 500 "Failed to parse tool call
+    arguments", so the agent never sees that error and the task dies. The bad call is replaced by a
+    small valid marker; the client's tool error message is kept. Returns the number repaired."""
+    n = 0
+    for m in messages if isinstance(messages, list) else []:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            args = fn.get("arguments") if isinstance(fn, dict) else None
+            if not isinstance(args, str):
+                continue
+            try:
+                ok = isinstance(json.loads(args), dict)
+            except ValueError:
+                ok = False
+            if not ok:
+                fn["arguments"] = json.dumps({"_invalid_arguments": (
+                    f"cut off or not valid JSON after {len(args)} characters; this call was not run")})
+                n += 1
+    return n
+
+
 class KentActivityLogger(CustomLogger):
-    """One JSON line per gateway call on stdout (journald → Alloy → Loki)."""
+    """One JSON line per gateway call on stdout (journald → Alloy → Loki). Also repairs tool-call
+    history that the local model server could not render (repair_tool_history)."""
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if isinstance(data, dict) and (n := repair_tool_history(data.get("messages"))):
+            print(json.dumps({"kent_event": "tool_history_repaired", "count": n,
+                              "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                              "identity": getattr(user_api_key_dict, "key_alias", None),
+                              "model_group": data.get("model")}), file=sys.stdout, flush=True)
+        return data
 
     def _emit(self, kwargs, start_time, end_time, status: str) -> None:
         slp = kwargs.get("standard_logging_object") or {}

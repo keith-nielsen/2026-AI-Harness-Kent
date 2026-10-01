@@ -224,3 +224,38 @@ async def test_denials_are_logged_as_json(gw, capsys):
     assert {"identity": "gent", "reason": "model not permitted", "model": "frontier"}.items() <= lines[-2].items()
     assert lines[-1]["identity"] is None and lines[-1]["reason"] == "invalid or missing key"
     assert "sk-" not in json.dumps(lines)       # keys never logged
+
+
+# --- Tool-call history repair (a reply cut off mid tool call must not kill later requests) ---
+def _hist(args):
+    return [{"role": "user", "content": "go"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "a"}'}},
+                {"id": "c2", "type": "function", "function": {"name": "write_file", "arguments": args}}]},
+            {"role": "tool", "tool_call_id": "c2", "content": "Error: Failed to parse tool arguments as JSON"}]
+
+
+@pytest.mark.parametrize("bad", ['{"path":"x.py","content":"csv = \\"\\"\\"date,site', "", "[1, 2]", "null", "{"])
+def test_cut_off_tool_arguments_are_replaced_with_valid_json(gw, bad):
+    msgs = _hist(bad)
+    assert gw.repair_tool_history(msgs) == 1
+    fixed = msgs[1]["tool_calls"][1]["function"]["arguments"]
+    assert isinstance(json.loads(fixed), dict) and "not run" in fixed and str(len(bad)) in fixed
+    assert msgs[1]["tool_calls"][0]["function"]["arguments"] == '{"path": "a"}'   # valid calls untouched
+    assert msgs[2]["content"].startswith("Error:")                                 # the client's error kept
+
+
+def test_valid_history_and_odd_shapes_are_left_alone(gw):
+    msgs = _hist('{"path": "b", "content": "x"}')
+    before = json.dumps(msgs)
+    assert gw.repair_tool_history(msgs) == 0 and json.dumps(msgs) == before
+    for odd in (None, "text", [None, 1, {"role": "assistant", "tool_calls": [None, {"function": None}]}]):
+        assert gw.repair_tool_history(odd) == 0
+
+
+async def test_pre_call_hook_repairs_and_logs(gw, capsys):
+    data = {"model": "fast", "messages": _hist("{bad")}
+    out = await gw.activity_logger.async_pre_call_hook(None, None, data, "completion")
+    assert out is data and json.loads(data["messages"][1]["tool_calls"][1]["function"]["arguments"])
+    line = [json.loads(l) for l in capsys.readouterr().out.splitlines() if "tool_history_repaired" in l][-1]
+    assert line["count"] == 1 and line["model_group"] == "fast"

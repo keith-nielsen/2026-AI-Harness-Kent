@@ -143,6 +143,19 @@ def test_chat_hook_once_per_session_last_day_only(env, monkeypatch):
     assert "Gent aaaaaaaa finished" in hook.context_for(k, "s2")
 
 
+def test_chat_hook_lookback_zero_shows_only_new_notices(env, monkeypatch, capsys):
+    poller, _, _, _, _, kdb = env
+    hook = load("kent_notices_hook")
+    monkeypatch.setattr(hook.kentlib, "conf", lambda: {"KENT_DB": str(kdb), "NOTICE_LOOKBACK_HOURS": "0"})
+    k = hook.kentlib.kent_db({"KENT_DB": str(kdb)})
+    k.execute("INSERT INTO notices (created_at, kind, text) VALUES (datetime('now','-1 minutes'),'stuck','earlier item')")
+    k.commit()
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO('{"session_id": "s9"}'))
+    assert hook.main() == 0 and capsys.readouterr().out == ""      # nothing from before the session
+    hook.kentlib.add_notice(k, "aaaaaaaa", "project_complete", "Gent aaaaaaaa finished")
+    assert "Gent aaaaaaaa finished" in hook.context_for(k, "s9", 0)
+
+
 def test_chat_hook_never_breaks_a_chat(env, monkeypatch, capsys):
     poller, *_ = env
     hook = load("kent_notices_hook")

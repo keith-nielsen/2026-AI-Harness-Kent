@@ -275,7 +275,10 @@ def main() -> int:
                 verdict = {"verdict": "discard", "confidence": verdict["confidence"],
                            "notes": f"blocked by template content filter ({flag!r}); judge said adopt: {verdict['notes']}"[:500]}
                 kentlib.audit("kent", "learning_blocked", f"stack={sid} learning={row['id']} match={flag!r}")
-            if verdict["verdict"] == "adopt" and (verdict["confidence"] or 0) >= ADOPT_THRESHOLD:
+            if verdict["verdict"] == "adopt" and (verdict["confidence"] or 0) >= ADOPT_THRESHOLD \
+                    and c.get("TEMPLATE_COMMITS", "1") != "1":
+                verdict["notes"] += " [template commits off: not committed]"   # evaluation runs keep the template fixed
+            elif verdict["verdict"] == "adopt" and (verdict["confidence"] or 0) >= ADOPT_THRESHOLD:
                 try:
                     sha = kentlib.gitea_append_learning(c, sid, row["id"], row["summary"], row["detail"] or "",
                                                         verdict["notes"])

@@ -103,6 +103,17 @@ def test_adopt_threshold_and_idempotence(env):
     assert len([c for c in calls["chat"] if c[0] == "smart"]) == 2   # each learning judged once
 
 
+def test_template_commits_off_reviews_but_never_commits(env, monkeypatch):
+    poller, calls, _, add, stacks, kdb = env
+    monkeypatch.setattr(poller.kentlib, "conf", lambda: {"KENT_DB": str(kdb), "STACKS_DIR": str(stacks),
+                                                         "TEMPLATE_COMMITS": "0"})
+    add("technique", "strong")
+    poller.main()
+    r = reviews(kdb)
+    assert [x["verdict"] for x in r] == ["adopt"] and "not committed" in r[0]["notes"]
+    assert calls["commits"] == []
+
+
 @pytest.mark.parametrize("reply", ["", "not json", '{"verdict":"ADOPT!!","confidence":"high"}',
                                    '{"verdict":"adopt","confidence":7}', "[1,2]"])
 def test_unparseable_or_hostile_judge_output_never_commits(env, reply):

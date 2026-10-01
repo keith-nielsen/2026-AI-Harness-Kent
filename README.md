@@ -1,7 +1,7 @@
 # Kent — Reference Agentic AI Stack
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Architecture](https://img.shields.io/badge/Architecture-v3.2.5-green)](docs/architecture.md)
+[![Architecture](https://img.shields.io/badge/Architecture-v3.2.6-green)](docs/architecture.md)
 [![Status](https://img.shields.io/badge/Status-v0.1.0--rc-orange)](https://github.com/keith-nielsen/2026-AI-Harness-Kent/releases)
 [![Conformance](https://img.shields.io/badge/Conformance-149%20pass%20%2F%200%20fail-brightgreen)](docs/conformance.md)
 [![Validate](https://github.com/keith-nielsen/2026-AI-Harness-Kent/actions/workflows/validate.yml/badge.svg)](.github/workflows/validate.yml)
