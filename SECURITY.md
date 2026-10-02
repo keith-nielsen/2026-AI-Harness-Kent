@@ -43,6 +43,18 @@ exposed, and the report remains confidential until resolved.
 - **Initial assessment:** Within 5 business days
 - **Fix timeline:** Communicated based on severity
 
+## Known Issues
+
+- **`kent -q` can destroy data it was told to keep** (found 2026-10-02 by the bench, not yet fixed).
+  In single-query mode, Hermes answers an unanswerable `clarify` question by telling the model to
+  "use its own judgment and continue" ([hermes-agent#107068](https://github.com/NousResearch/hermes-agent/issues/107068)),
+  and Hermes's approval gate does not recognise every destructive command (it is a heuristic, not a
+  boundary, per Hermes's own SECURITY.md). Kent's shell currently runs unsandboxed under the `kent`
+  account. **Until the sandboxed terminal backend lands:** do not point `kent -q` at folders holding
+  data you cannot lose; use interactive `kent chat` (approvals and questions reach a human) for
+  destructive work; keep backups of anything Kent can write. Details: `TODO.md`,
+  `docs/design/harness-safeguard-evaluation.md`.
+
 ## Disclosure Policy
 
 We follow coordinated disclosure. The reporter will be credited in the
