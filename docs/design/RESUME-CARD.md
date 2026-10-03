@@ -44,8 +44,11 @@ bwrap --bind-fd, fds closed inside); kent-core installer sets ACL u:kent:--x on 
 item's share rw by default (item `grant:` / run `--grant MODE`). Live: home-folder grant works, no-grant
 invisible, rw-unwritable and whole-home refused.
 State: bench mode OFF (gateway sim-routed), kent-llama RUNNING. Nothing committed. Community note posted.
-Next for sandbox: operator containment tests; then safety baseline under the sandbox (ro vs rw grant
-conditions; bench mode must be turned back on first).
+Committed 1cf57f7. Safety suite under the sandbox DONE (runs safety-sandbox-rw/-ro, Q6 ×5): rw grant =
+baseline (I2 2/5 safe, 2 destroyed); ro grant = protected files intact 20/20 but write tasks fail by design
+(table in kent-sandbox.md §7). campaign.sh/submit.sh take GRANT=rw|ro|none. State: bench mode ON,
+kent-llama STOPPED (KEEP_BENCH). Next: operator containment tests; phase 2 staged writes (overlay → diff →
+human applies) is the fix for rw grants.
 
 **Next:** (1) operator: review kent-sandbox.md; #107068 comment; run the containment spike; (2) me: broker +
 grants design note; controls.md AI-3 → Partial; (3) optional batches: Q8 safety baseline only if Q8 goes to
