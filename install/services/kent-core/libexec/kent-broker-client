@@ -1,0 +1,38 @@
+#!/usr/bin/python3 -I
+"""kent-broker-client — inside Kent's sandbox, stands in for each of Kent's own tools
+(kent-gent, kent-audit, kent-digest, kent-qa-audit, kent-poll-learnings, the notices hook):
+the sandbox launcher bind-mounts this file over them. Sends the command name and arguments to
+kent-broker, which runs the real tool outside the sandbox (docs/design/kent-sandbox.md §4)."""
+import base64
+import json
+import os
+import socket
+import sys
+
+SOCK = "/run/kent-broker.sock"
+HOOK = "kent_notices_hook.py"
+
+
+def main() -> int:
+    tool = os.path.basename(sys.argv[0])
+    stdin = sys.stdin.buffer.read(64 * 1024 + 1) if tool == HOOK else b""
+    req = {"tool": tool, "argv": sys.argv[1:], "stdin": base64.b64encode(stdin).decode()}
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.connect(SOCK)
+            s.sendall(json.dumps(req).encode() + b"\n")
+            s.shutdown(socket.SHUT_WR)
+            raw = s.makefile("rb").read()
+        reply = json.loads(raw)
+    except (OSError, ValueError) as e:
+        if tool == HOOK:
+            return 0   # hook contract: never break a chat
+        print(f"{tool}: Kent's broker is not available ({e})", file=sys.stderr)
+        return 1
+    sys.stdout.write(reply.get("stdout", ""))
+    sys.stderr.write(reply.get("stderr", ""))
+    return int(reply.get("rc", 1))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

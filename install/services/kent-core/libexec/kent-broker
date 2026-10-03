@@ -1,0 +1,205 @@
+#!/usr/bin/python3 -I
+"""kent-broker — runs Kent's own tools outside the sandbox Hermes runs in
+(docs/design/kent-sandbox.md §4). One process per connection (kent-broker.socket, Accept=yes):
+stdin/stdout is the connected Unix socket. Request: one JSON line
+  {"tool": "<name>", "argv": [...], "stdin": "<base64, optional>"}
+Reply: one JSON line {"rc": N, "stdout": "...", "stderr": "..."}.
+
+Only the tools and argument shapes below are accepted; no paths, environment or working
+directory come from the client. Every request except the notices hook is recorded in the audit
+chain before it runs, every refusal after it is refused."""
+import base64
+import json
+import os
+import re
+import secrets
+import shutil
+import socket
+import stat
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+BIN = Path("/opt/kent-core/bin")
+KHOME = Path("/var/lib/kent")
+WORK = KHOME / "work"
+STAGE = KHOME / "inbox" / "broker"
+PY = "/usr/bin/python3"
+ENV = {"KENT_CONF": "/etc/kent/kent/kent.conf", "HOME": str(KHOME), "LANG": "C.UTF-8",
+       "PATH": "/opt/kent-core/bin:/usr/bin:/bin"}
+MAX_REQUEST = 128 * 1024
+MAX_STDIN = 64 * 1024
+MAX_OUT = 1024 * 1024
+PROJECT_FILES = ("project.yaml", "agents.yaml", "tasks.yaml")
+PROJECT_FILE_MAX = 256 * 1024
+HEX8 = re.compile(r"[0-9a-f]{8}")
+# Names the client can be called by (command name or the script it shadows) → script.
+TOOLS = {"kent-gent": "kent_gent.py", "kent-audit": "kent_audit.py", "kent-digest": "kent_digest.py",
+         "kent-qa-audit": "kent_qa_audit.py", "kent-poll-learnings": "kent_poll_learnings.py",
+         "kent-notices-hook": "kent_notices_hook.py"}
+TOOLS.update({v: v for v in list(TOOLS.values())})
+GENT_ID_ACTIONS = ("status", "publish", "wait", "logs", "assess", "pause", "resume", "restart", "destroy")
+GENT_OPTIONS = {"logs": {"--tail": (1, 10000)}, "wait": {"--timeout": (1, 86400)},
+                "assess": {"--no-publish": None}, "destroy": {"--purge": None}}
+
+
+class Refused(Exception):
+    pass
+
+
+def stage_project(project: str) -> Path:
+    """Copy the three project files from a directory under Kent's work directory into a fresh
+    directory the sandbox cannot see: regular files only, never through a symlink, size-capped."""
+    work = WORK.resolve()
+    src = Path(os.path.realpath(project))
+    if src == work or work not in src.parents:
+        raise Refused(f"--project must be a directory under {WORK}")
+    try:
+        dfd = os.open(src, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise Refused(f"--project {project}: not a directory") from None
+    STAGE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    dest = STAGE / secrets.token_hex(8)
+    dest.mkdir(mode=0o700)
+    try:
+        for name in PROJECT_FILES:
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+            except OSError:
+                raise Refused(f"{name} missing, or not a regular file") from None
+            with os.fdopen(fd, "rb") as fh:
+                st = os.fstat(fh.fileno())
+                if not stat.S_ISREG(st.st_mode) or st.st_size > PROJECT_FILE_MAX:
+                    raise Refused(f"{name} must be a regular file of at most {PROJECT_FILE_MAX // 1024} KiB")
+                data = fh.read(PROJECT_FILE_MAX + 1)
+            if len(data) > PROJECT_FILE_MAX:
+                raise Refused(f"{name} larger than {PROJECT_FILE_MAX // 1024} KiB")
+            (dest / name).write_bytes(data)
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    finally:
+        os.close(dfd)
+    return dest
+
+
+def gent_args(argv: list[str]) -> tuple[list[str], Path | None]:
+    if argv in ([], ["list"]):
+        return ["list"], None
+    if argv[0] == "spawn":
+        if len(argv) != 5 or argv[1] != "--name" or argv[3] != "--project":
+            raise Refused("usage: kent-gent spawn --name NAME --project DIR")
+        if not re.fullmatch(r"[\w .-]{1,64}", argv[2]):
+            raise Refused("NAME: letters, digits, space, . _ -; max 64")
+        staged = stage_project(argv[4])
+        return ["spawn", "--name", argv[2], "--project", str(staged)], staged
+    if argv[0] not in GENT_ID_ACTIONS or len(argv) < 2 or not HEX8.fullmatch(argv[1]):
+        raise Refused(f"usage: kent-gent <list|spawn|{'|'.join(GENT_ID_ACTIONS)}> [ID] [option]")
+    action, rest, allowed = argv[0], argv[2:], GENT_OPTIONS.get(argv[0], {})
+    if rest:
+        if rest[0] not in allowed:
+            raise Refused(f"unsupported option for kent-gent {action}: {' '.join(rest)}")
+        bounds = allowed[rest[0]]
+        if bounds is None and len(rest) != 1:
+            raise Refused(f"{rest[0]} takes no value")
+        if bounds is not None and (len(rest) != 2 or not rest[1].isdigit()
+                                   or not bounds[0] <= int(rest[1]) <= bounds[1]):
+            raise Refused(f"{rest[0]} needs a number from {bounds[0]} to {bounds[1]}")
+    return [action, argv[1], *rest], None
+
+
+def audit_args(argv: list[str]) -> list[str]:
+    if argv == ["verify"]:
+        return argv
+    if len(argv) >= 2 and argv[0] == "append":
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", argv[1]):
+            raise Refused("EVENT: lower-case letters, digits, _; max 40")
+        detail = " ".join(argv[2:])
+        if len(detail) > 1000:
+            raise Refused("DETAIL longer than 1000 characters")
+        return ["append", "kent", argv[1], detail]   # entity is always Kent
+    raise Refused("usage: kent-audit verify | kent-audit append EVENT [DETAIL]")
+
+
+def validate(req: object) -> tuple[str, list[str], bytes, Path | None]:
+    """Request → (script, argv, stdin, staged dir to remove afterwards). Raises Refused."""
+    if not isinstance(req, dict) or set(req) - {"tool", "argv", "stdin"}:
+        raise Refused("malformed request")
+    tool, argv = req.get("tool"), req.get("argv", [])
+    if tool not in TOOLS:
+        raise Refused(f"not a brokered tool: {str(tool)[:60]!r}")
+    if not isinstance(argv, list) or len(argv) > 32 or not all(isinstance(a, str) and len(a) <= 2048 for a in argv):
+        raise Refused("malformed arguments")
+    script = TOOLS[tool]
+    try:
+        stdin = base64.b64decode(req.get("stdin") or "", validate=True)
+    except ValueError:
+        raise Refused("malformed stdin") from None
+    if script == "kent_notices_hook.py":
+        if argv or len(stdin) > MAX_STDIN:
+            raise Refused("notices hook: no arguments, at most 64 KiB on stdin")
+        return script, [], stdin, None
+    if stdin:
+        raise Refused(f"{tool} takes no input")
+    if script == "kent_gent.py":
+        args, staged = gent_args(argv)
+        return script, args, b"", staged
+    if script == "kent_audit.py":
+        return script, audit_args(argv), b"", None
+    if argv:
+        raise Refused(f"{tool} takes no arguments")
+    return script, [], b"", None
+
+
+def audit(event: str, detail: str) -> None:
+    sys.path.insert(0, str(BIN))
+    import kentlib  # noqa: PLC0415
+    kentlib.audit("kent", event, detail[:300])
+
+
+def cap(b: bytes) -> str:
+    s = b[:MAX_OUT].decode("utf-8", "replace")
+    return s + ("\n[kent-broker: output truncated]" if len(b) > MAX_OUT else "")
+
+
+def handle(raw: bytes) -> dict:
+    try:
+        req = json.loads(raw)
+    except ValueError:
+        req = None
+    try:
+        script, argv, stdin, staged = validate(req)
+    except Refused as e:
+        tool = req.get("tool") if isinstance(req, dict) else None
+        audit("broker_refused", f"{str(tool)[:40]}: {e}")
+        return {"rc": 2, "stdout": "", "stderr": f"kent-broker: {e}\n"}
+    try:
+        if script != "kent_notices_hook.py":
+            audit("broker", " ".join([script, *argv]))
+        r = subprocess.run([PY, str(BIN / script), *argv], input=stdin, capture_output=True, env=ENV, cwd=KHOME)
+        return {"rc": r.returncode, "stdout": cap(r.stdout), "stderr": cap(r.stderr)}
+    finally:
+        if staged:
+            shutil.rmtree(staged, ignore_errors=True)
+
+
+def main() -> int:
+    conn = socket.socket(fileno=0)
+    _pid, uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    if uid != os.getuid():
+        return 1   # the socket is 0600 kent; anything else is not Kent
+    raw = conn.makefile("rb").readline(MAX_REQUEST + 1)
+    if len(raw) > MAX_REQUEST:
+        reply = {"rc": 2, "stdout": "", "stderr": "kent-broker: request too large\n"}
+    else:
+        try:
+            reply = handle(raw)
+        except Exception as e:  # noqa: BLE001 - e.g. audit chain unavailable: refuse, say why
+            reply = {"rc": 1, "stdout": "", "stderr": f"kent-broker: {type(e).__name__}: {e}\n"}
+    conn.sendall(json.dumps(reply).encode() + b"\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

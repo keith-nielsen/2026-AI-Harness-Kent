@@ -165,11 +165,16 @@ All run with `ProtectSystem=strict`, `ProtectHome=yes`, `NoNewPrivileges=yes`, e
 
 | Who | May run | As | Constraint |
 |---|---|---|---|
-| `%kent-operators` | `/opt/kent-core/libexec/kent-exec` (`/etc/sudoers.d/92-kent-operators`, NOPASSWD) | kent | the only way into Kent; kent-exec validates every argument, caps payloads (64 KiB question, 200 MiB export) and records `human:<name>` in the audit chain |
-| `kent` | `kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl` (`/etc/sudoers.d/91-kent-gent`, NOPASSWD) | root | root-owned brokers; stack id must be 8 hex; project files read with `O_NOFOLLOW`, regular files only, 256 KiB max; destroy and ctl act only on Gents in the root-only registry; ctl allows inspect/logs/stop/start |
+| `%kent-operators` | `/opt/kent-core/libexec/kent-exec` (`/etc/sudoers.d/92-kent-operators`, NOPASSWD; `closefrom_override` so `kent --grant` can pass folder descriptors) | kent | the only way into Kent; kent-exec validates every argument, caps payloads (64 KiB question, 200 MiB export) and records `human:<name>` in the audit chain |
+| `kent` (outside the sandbox: timers, kent-exec, kent-broker) | `kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl` (`/etc/sudoers.d/91-kent-gent`, NOPASSWD) | root | Kent's Hermes is sandboxed (`no_new_privs`) and reaches these only through kent-broker; root-owned brokers; stack id must be 8 hex; project files read with `O_NOFOLLOW`, regular files only, 256 KiB max; destroy and ctl act only on Gents in the root-only registry; ctl allows inspect/logs/stop/start |
 | `<op>` with sudo | `./install.sh`, `./uninstall.sh`, `./kent-admin`, the module installers | root | normal sudo with password (a time-limited development grant, `install/dev/agent-sudo.sh`, exists for unattended build/test runs and expires automatically) |
 
 Every sudo command is recorded by sudo in the journal and ingested into Kent's audit chain.
+
+**Kent's broker** (`kent-broker.socket` → `kent-broker@.service`, `User=kent`, `/run/kent-broker.sock`
+0600 kent; `docs/design/kent-sandbox.md` §4) is the only way out of Kent's sandbox: it runs
+kent-gent, kent-audit (`verify`, `append` as entity `kent` only), kent-digest, kent-qa-audit,
+kent-poll-learnings and the notices hook with allowlisted arguments, and audits each request.
 
 ---
 

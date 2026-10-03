@@ -381,6 +381,9 @@ uninstall_module() {
     while read -r g u; do
         [[ -n "$u" ]] && id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx "$g" && { run gpasswd -d "$u" "$g" || true; }
     done < <(entries member)
+    while read -r u p; do
+        [[ -n "$p" && -d "$p" ]] && { run setfacl -x "u:$u" "$p" || true; }
+    done < <(entries acl)
     while read -r u; do [[ -n "$u" ]] && id "$u" &>/dev/null && run userdel "$u"; done < <(entries user)
     while read -r g; do [[ -n "$g" ]] && getent group "$g" &>/dev/null && run groupdel "$g"; done < <(entries group)
 

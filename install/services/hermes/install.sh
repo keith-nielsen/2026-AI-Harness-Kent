@@ -14,6 +14,7 @@
 #            base.yaml + profile-<lab|hardened>.yaml
 #   state    /var/lib/kent/hermes (HERMES_HOME, kent 0700): SOUL, skills, sessions, memory
 #   entry    /opt/kent-hermes/bin/kent-hermes  runs Hermes as kent with a clean environment
+#            in a bubblewrap sandbox (docs/design/kent-sandbox.md)
 # The operator's own Hermes (~/.hermes) and Python environments are never touched.
 # Requires the litellm module (Kent's gateway key).
 # Usage: sudo ./install.sh [--profile lab|hardened] [--no-verify] [--dry-run]
@@ -44,6 +45,7 @@ audit_event "install started (profile=$PROFILE ${INVOCATION_ARGS})"
 log "preflight"
 [[ -x /usr/bin/python3.12 ]] || die "system Python 3.12 not found (Ubuntu 24.04 ships it)"
 command -v git >/dev/null || die "git is required"
+[[ -x /usr/bin/bwrap ]] || die "bubblewrap is required (Kent's Hermes runs in its sandbox): apt install bubblewrap"
 need '[[ -s /etc/kent/litellm/credentials/kent_key ]]' "litellm module not installed (Kent's gateway key missing)"
 
 # --- Accounts -------------------------------------------------------------------------
@@ -110,19 +112,8 @@ if [[ "$DRY_RUN" -eq 0 && ! -x "$OPT/venv/bin/hermes" ]]; then
 fi
 [[ "$DRY_RUN" -eq 1 ]] || { chown -R root:root "$OPT"; chmod -R go-w "$OPT"; }
 
-cat > "$WORK/kent-hermes" <<'EOF'
-#!/bin/sh
-# Kent's Hermes entry point: always as the kent account, clean environment, Kent's home and
-# the administrator-pinned policy. Installed by install/services/hermes/install.sh.
-[ "$(id -un)" = kent ] || { echo "kent-hermes: must run as the kent account (use: kent)" >&2; exit 1; }
-cd /var/lib/kent/work || exit 1
-exec env -i PATH=/opt/kent-core/bin:/usr/local/bin:/usr/bin:/bin HOME=/var/lib/kent \
-    HERMES_HOME=/var/lib/kent/hermes HERMES_MANAGED_DIR=/etc/kent/hermes/managed \
-    KENT_CONF=/etc/kent/kent/kent.conf LANG=C.UTF-8 TERM="${TERM:-dumb}" \
-    COLUMNS="${COLUMNS:-}" LINES="${LINES:-}" KENT_PRINCIPAL="${KENT_PRINCIPAL:-${SUDO_USER:-kent}}" \
-    /opt/kent-hermes/venv/bin/hermes "$@"
-EOF
-place_file file "$WORK/kent-hermes" "$OPT/bin/kent-hermes" 0755 root root
+# Entry point: clean environment, Kent's home, managed policy, bubblewrap sandbox (kent-hermes).
+place_file file "$HERE/kent-hermes" "$OPT/bin/kent-hermes" 0755 root root
 
 # --- Managed policy (root-owned; Kent cannot change it) -------------------------------------
 claim_path path /etc/kent/hermes

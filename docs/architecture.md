@@ -1,12 +1,22 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.6
-date: 2026-10-02
+version: 3.2.7
+date: 2026-10-03
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.7
+    date: 2026-10-03
+    summary: >
+      Kent's Hermes runs in a bubblewrap sandbox (§12.4): only its Hermes home, its scratch
+      directory and folders the operator grants per session (`--grant`, `--grant-rw`) are
+      writable or visible; kent.db, the audit chain and Kent's credentials are not mounted.
+      Kent's own tools (kent-gent, kent-audit, kent-digest, kent-qa-audit, kent-poll-learnings,
+      the notices hook) run outside through an allowlisting broker (kent-broker.socket), which
+      audits every request and fixes the audit entity to `kent`. Design:
+      docs/design/kent-sandbox.md.
   - version: 3.2.6
     date: 2026-10-02
     summary: >
@@ -733,6 +743,28 @@ confinement, proxy policy).
 
 Planned: key rotation, container image scanning.
 
+### 12.4 Kent's sandbox
+
+Kent's Hermes (and every shell, script and hook it starts) runs under `bwrap` from the
+`kent-hermes` launcher: own mount, PID, IPC and UTS namespaces, host network, all capabilities
+dropped, dies with its launcher. Read-only: `/usr`, `/etc` (Kent's credentials directory masked),
+`/opt/kent-hermes`, `/opt/kent-core`. Writable: `/var/lib/kent/hermes` and `/var/lib/kent/work`;
+the rest of Kent's home is a throwaway tmpfs, so kent.db, the audit chain, digests and inbox are
+absent. The operator's folders are absent unless granted for the session: `kent --grant DIR`
+(read-only) or `--grant-rw DIR`. The `kent` command opens each folder as the operator and hands
+it over as an open descriptor (`sudo -C`, sudoers `closefrom_override` for kent-exec only), so
+folders inside a home work; `kent-exec` accepts only directories the calling operator owns,
+outside system and Kent trees and not a whole home, audits each grant and closes every other
+descriptor; the launcher mounts them by descriptor and closes the descriptors inside.
+
+`sudo` cannot work inside (`no_new_privs`), and Kent's own tools need it and Kent's private
+state. They run outside through `kent-broker` (`/run/kent-broker.sock`, kent 0600, one process per
+request): inside, a client stands in for each tool name; the broker accepts only the listed
+tools and argument shapes, stages Gent project files without following symlinks, audits every
+request (`broker`) and refusal (`broker_refused`), and writes audit entries only as `kent`.
+The approval gate stays; for read-write grants it is still the only check (staged writes are
+the planned fix). Containment tests: operator-run (TODO.md).
+
 ---
 
 ## 13. Secrets Management — Live
@@ -773,7 +805,8 @@ No shared account, and no one logs in as `kent`. Two sudo rules make up the whol
 privilege surface: `%kent-operators ALL=(kent) NOPASSWD: kent-exec` (the only way
 into Kent; validates arguments, records `human:<name>` in the audit chain), and
 `kent ALL=(root) NOPASSWD:` the root-owned, argument-validated brokers
-`kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl`. One polkit rule adds that
+`kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl`. Kent's Hermes cannot use that rule
+itself (sandboxed, §12.4): its Gent tools reach it through `kent-broker`, outside the sandbox. One polkit rule adds that
 `kent-operators` may start, stop and restart `kent-llama.service` (no other unit or verb). Full detail:
 `docs/privilege-map.md`.
 

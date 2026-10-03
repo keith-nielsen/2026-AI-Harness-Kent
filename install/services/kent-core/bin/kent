@@ -3,6 +3,11 @@
 
   kent                          chat with Kent
   kent -q "question"            one question, one answer
+  kent [--grant DIR | --grant-rw DIR]... [-q "question"]
+                                give Kent (chat or one question) a folder you own, read-only or
+                                read-write, even inside your home; without a grant Kent cannot
+                                see your files. Inside it, normal permissions apply: Kent reads
+                                what is readable by others and writes only where kent may write
   kent status                   health of Kent and its services
   kent digest                   today's digest
   kent notices [--all]          what Kent has to tell you about Gents (finished, failed, halted, stuck)
@@ -14,9 +19,10 @@
   kent llama <start|stop|restart|status>   the local model server (on demand)
 
 Kent runs under its own account; this command talks to it through one fixed, audited entry
-point (sudo -u kent kent-exec). Your files are read and written by you, never by Kent.
+point (sudo -u kent kent-exec). Kent runs in a sandbox: it sees only the folders you grant.
 `kent llama` goes to systemd directly (polkit lets kent-operators start/stop that one unit).
 """
+import fcntl
 import grp
 import io
 import json
@@ -54,8 +60,13 @@ def check_group() -> None:
     die("you are not a Kent operator. An administrator can add you with: sudo kent-admin add-operator " + user)
 
 
-def kexec(*args: str, stdin=None, stdout=None) -> int:
-    return subprocess.run(["sudo", "-n", "-u", "kent", EXEC, *args], input=stdin, stdout=stdout).returncode
+def sudo_kent(fds: tuple[int, ...] = ()) -> list[str]:
+    """sudo as kent; with grant descriptors, keep them open across sudo (sudoers closefrom_override)."""
+    return ["sudo", "-n", *(["-C", str(max(fds) + 1)] if fds else []), "-u", "kent", EXEC]
+
+
+def kexec(*args: str, stdin=None, stdout=None, fds: tuple[int, ...] = ()) -> int:
+    return subprocess.run([*sudo_kent(fds), *args], input=stdin, stdout=stdout, pass_fds=fds).returncode
 
 
 def pack_project(src: Path) -> bytes:
@@ -115,18 +126,50 @@ def llama(action: str) -> int:
     return llama("status") if action != "stop" else 0
 
 
+def take_grants(argv: list[str]) -> tuple[list[str], tuple[int, ...], list[str]]:
+    """Leading --grant/--grant-rw DIR pairs. Each folder is opened here, as you, and handed to Kent
+    as an open descriptor (fd 3 upward), so Kent needs no access to the path leading to it (your
+    home, say); kent-exec checks the rest. Returns (kent-exec options, descriptors, rest)."""
+    pairs = []
+    while argv[:1] in (["--grant"], ["--grant-rw"]):
+        if len(argv) < 2:
+            die(f"{argv[0]} needs a directory", 2)
+        d = Path(argv[1]).expanduser().resolve()
+        try:
+            pairs.append((argv[0], os.open(d, os.O_PATH | os.O_DIRECTORY)))
+        except OSError as e:
+            die(f"{argv[1]}: {e.strerror.lower()}", 2)
+        argv = argv[2:]
+    if len(pairs) > 8:
+        die("at most 8 grants", 2)
+    high = []
+    for flag, fd in pairs:                       # out of the way of 3.. first, then into place
+        high.append((flag, fcntl.fcntl(fd, fcntl.F_DUPFD, 100)))
+        os.close(fd)
+    out, fds = [], []
+    for i, (flag, h) in enumerate(high):
+        os.dup2(h, 3 + i)
+        os.close(h)
+        out += [flag, str(3 + i)]
+        fds.append(3 + i)
+    return out, tuple(fds), argv
+
+
 def main(argv: list[str]) -> int:
     if argv[:1] in (["-h"], ["--help"], ["help"]):
         print(__doc__.strip()); return 0
     check_group()
+    grants, fds, argv = take_grants(argv)
     if not argv:
         kexec("notices", "--quiet")   # unread notices first: Kent cannot speak until you do
-        os.execvp("sudo", ["sudo", "-n", "-u", "kent", EXEC, "chat"])
+        os.execvp("sudo", [*sudo_kent(fds), "chat", *grants])
     cmd = argv[0]
     if cmd == "-q":
         if len(argv) < 2:
-            die('usage: kent -q "question"', 2)
-        return kexec("ask", stdin=" ".join(argv[1:]).encode())
+            die('usage: kent [--grant DIR]... -q "question"', 2)
+        return kexec("ask", *grants, stdin=" ".join(argv[1:]).encode(), fds=fds)
+    if grants:
+        die("--grant/--grant-rw go with chat (kent) or a question (kent -q)", 2)
     if cmd in ("status", "digest", "audit", "gents"):
         return kexec(cmd)
     if cmd == "notices":

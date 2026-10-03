@@ -42,7 +42,7 @@ jobs:
                       yaml.safe_load(p.read_text())
                   elif p.suffix == ".json":
                       json.loads(p.read_text())
-                  elif p.suffix == ".py" or p.name in ("kent-spawn-gent", "kent-destroy-gent", "kent-gent-ctl", "kent-exec", "kent"):
+                  elif p.suffix == ".py" or p.name in ("kent-spawn-gent", "kent-destroy-gent", "kent-gent-ctl", "kent-exec", "kent-broker", "kent-broker-client", "kent"):
                       py_compile.compile(str(p), doraise=True)
               except Exception as e:  # noqa: BLE001
                   errors.append(f"{p}: {e}")
