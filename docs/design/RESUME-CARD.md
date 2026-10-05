@@ -22,6 +22,12 @@ the mount. **Verified by tests/bench/lifecyclecheck.sh (16:27-16:29, PASS):** bo
 no tuning journal activity. Agentic workload at true base clock: 29.6 tok/s (boosted run: 31.1).
 Manual test settings still in effect: governor performance, swap off, GPU locked 1650 (operator: keep for
 testing). MTP result valid only relatively (boost was on): rerun mtpcheck under `hostprofile.sh apply`.
+**MTP VALIDATED at base clock (mtpcheck-10051632, 16:32-16:55; hostprofile OK start+end, 0 flagged requests,
+busy cores ~3592 MHz):** tok/s edit / agentic: none 30.75/30.24; n1 35.07/33.36; **n1 -tb 5 36.51/35.18**;
+n2 36.80/34.75; n3 38.64/34.91. Step = pass(N) + ~3 ms + ~7-8 ms per draft. Pass (llama-bench, -t 5): 29.6 /
+42.8 / 56.8 / 70.8 ms for N=1-4 (-t 4: +5-12%). Rounds agree to 0.1-1.4%; text divergence from `none` is
+deterministic (same char each round). Next before production: prose, n2/n3 at -tb 5, 2-slot concurrency.
+Note: the edit prompt embeds kent_llama_launch.py (edited today) -> edit token counts differ across days.
 Also fixed: lib-preflight PREFLIGHT_KINDS lacked `acl` (from the 10-04 sandbox install) — CI test failed.
 
 ## 2026-10-05 (llama.cpp build bake-off: planned, not started) — superseded
