@@ -54,6 +54,17 @@ mutt.sh: stock-mtp/q6-mtp = MTP 2 p0.8, q6-mtp at 128k, no -tb anywhere now) -> 
 2 rounds). The Edge0 4-h quality campaign was dropped: Edge0 has no MTP head and its LoRA targets their routing;
 run it only if K=4 is substantially faster. Depth run 1: other-load flags 19:22-21:37 (Chromium) on all MTP rows;
 interim: no-MTP decode fell to ~11.5 tok/s at 64K (suspect, taint), MTP held 24-30; MTP1 held prose better at depth.
+**OVERNIGHT RESULTS (2026-10-05/06):**
+- Depth run 1, clean Q4 no-MTP round: decode 27.0 / 22.7 / 17.6 / 11.9 tok/s at 8 / 16 / 32 / 64K (each plain step
+  37 -> 84 ms; my '~1 ms attention' guess was wrong). MTP rows (tainted, constant load) held 24-30 at 64K: MTP ~2x
+  at long context. Clean confirmation: depth2.
+- edge0check-10052217: Q4 at K=4 (override works) +28% on edit/agentic/prose vs Q4 K=8 (39.1/38.9/42.7 vs
+  30.6/30.3/33.4). Edge0 variants failed: upstream build has no --no-mmap (now -lm none; fixed in edge0check.sh
+  and mutt.sh) -> rerun queued (edge0b).
+- mtp-quality (v1, 1 run each): Q4 control 19/47 (probes 19, k08 0, crews 0/4); **Q4+MTP2 p0.8 24/47** (21, 0,
+  3/4 incl. g02 pass); **Q6+MTP2 p0.8 (128k) 24/47** (22, 1, 1/4). No sign MTP hurts quality; Q4 vs Q6 tie here.
+- Queue after midnight: depth2 (clean) -> edge0b -> pairmtp (mtpcheck pair: n2p08 under 2 slots) -> k4quality
+  (stock-k4, edge0-k4-lora).
 Also fixed: lib-preflight PREFLIGHT_KINDS lacked `acl` (from the 10-04 sandbox install) — CI test failed.
 
 ## 2026-10-05 (llama.cpp build bake-off: planned, not started) — superseded
