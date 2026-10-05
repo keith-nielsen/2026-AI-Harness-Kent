@@ -39,6 +39,14 @@ decode 2 at once -8.0% (24.7-25.7 vs 27.1-27.6), edit+agentic at once -3.3% on m
 -0.7% (2 at once), interference +0.6/+0.1%, single decode -0.6% (control). VERDICT: remove -tb 4 -> done in the
 launcher (architecture 3.2.9); live after reinstall + restart. Finding: concurrent requests are NOT deterministic
 (identical inputs gave 2949 or 2995 tokens by timing) — compare pair runs on matched text only.
+**Q6 vs Q4 WITH MTP (mtpcheck-10051842, 18:42-19:05, same session, 2 rounds, all at 256k: Q6+MTP fits, 7.7 of
+8.2 GB VRAM):** tok/s edit / agentic / prose — Q4 + MTP2 p0.8 -tb5: 39.35 / 37.99 / 33.16; **Q6 + MTP2 p0.8
+-tb5: 34.03 / 33.18 / 29.44 (-14 / -13 / -11% vs Q4)**; Q6 no MTP: 24.75 / 24.86 / 27.44 (flagged 'other load' in
+both rounds, consistent within 1%: likely driver/kernel time, monitor now splits user/kernel/irq). MTP gains more on
+Q6 (+37 / +33 / +7%) than Q4; Q6+MTP beats today's production (Q4, no MTP: 30.85 / 30.40 / 33.36) on edit (+10%)
+and agentic (+9%), -12% on prose. Quality (10-02, pre-MTP, 2 reps): Q6 beat Q4 on every measure (probes 186 vs
+180/230, crews 8 vs 6/12, pass^2 108 vs 100, flips 10 vs 17); Q8 28/47 vs Q6 21/47 (one run). Open: quality
+with MTP. Operator: much less interested in the -tb question.
 Also fixed: lib-preflight PREFLIGHT_KINDS lacked `acl` (from the 10-04 sandbox install) — CI test failed.
 
 ## 2026-10-05 (llama.cpp build bake-off: planned, not started) — superseded
