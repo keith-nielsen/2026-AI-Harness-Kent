@@ -5,8 +5,9 @@ Ported from the operator's measured launcher (llamaserver-qwen36-optimum.sh, 202
 the reasoning behind every number is in that script's header. Two slots with a unified KV cache
 (2026-09-30 tuning pass): two requests run at once, each can use the whole context, and a single
 stream keeps ~97% of its one-slot speed; total decode is capped at ~35 tok/s by the CPU experts,
-so more slots only split it. The system tuning it applied
-with sudo (SMT off, CPU boost off) is done by kent-llama-tuning.service, as root, not here.
+so more slots only split it. The measurements assumed SMT off and CPU boost off; those host settings
+are not changed by Kent (no service touches them since 2026-10-05): the operator sets them by hand with
+tests/bench/hostprofile.sh.
 
   kent-llama-launch            exec llama-server
   kent-llama-launch --print    print the command line instead

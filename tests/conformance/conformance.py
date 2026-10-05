@@ -359,7 +359,7 @@ def check_gents() -> None:
     ok(st.returncode == 0, "§12/§15 isolation", "Gent tools self-test in a locked-down container", last)
 
 
-LLAMA_UNITS = ("kent-llama.service", "kent-llama-tuning.service", "srv-kent-models.mount")
+LLAMA_UNITS = ("kent-llama.service", "srv-kent-models.mount")
 
 
 def models_mode(manifest: Path = Path("/var/lib/kent-install/manifest/llama")) -> str:
@@ -394,8 +394,14 @@ def check_llama() -> None:
        "kent-llama.service runs as kent-llama, reads models via kent-models")
     ok(sh("systemctl", "is-enabled", "kent-llama.service") in ("static", "disabled"), "§2 tiers",
        "kent-llama.service on demand (not started at boot)")
-    for u in LLAMA_UNITS[:2]:
-        ok(sh("systemctl", "show", "-p", "NoNewPrivileges", "--value", u) == "yes", "§19 hardening", f"{u} NoNewPrivileges")
+    ok(sh("systemctl", "show", "-p", "NoNewPrivileges", "--value", LLAMA_UNITS[0]) == "yes", "§19 hardening",
+       f"{LLAMA_UNITS[0]} NoNewPrivileges")
+    # Host performance settings (SMT, boost, governor, swap, GPU clocks) are the operator's, set by hand with
+    # tests/bench/hostprofile.sh: no Kent unit may change them on start or stop (retired 2026-10-05).
+    tuning = Path("/etc/systemd/system/kent-llama-tuning.service").exists()
+    deps = [l for l in unit.splitlines() if l.split("=", 1)[0] in ("Requires", "Wants", "After", "BindsTo")]
+    ok(not tuning and not any("tuning" in l for l in deps), "§2 tiers",
+       "kent-llama start/stop changes no host performance setting (no tuning unit)")
     out = sh("systemd-analyze", "security", "--no-pager", "kent-llama.service")
     m = re.search(r"exposure level for \S+: ([\d.]+)", out)
     score = float(m.group(1)) if m else 10.0

@@ -1,12 +1,27 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.7
-date: 2026-10-03
+version: 3.2.8
+date: 2026-10-05
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.8
+    date: 2026-10-05
+    summary: >
+      Starting or stopping the local model server no longer changes any host
+      performance setting. The kent-llama-tuning.service that switched SMT and CPU
+      boost off when kent-llama started wrote the boot values back when it stopped,
+      so every benchmark that stopped kent-llama to run its own server silently ran
+      with boost on (about 3.95 instead of 3.6 GHz, 82-86 C). It is retired: the
+      installer removes it from an existing install without running its restore step,
+      so SMT and boost stay exactly as they are. Host settings (SMT, boost, CPU
+      governor, swap, GPU clock lock) are now the operator's alone, set by hand with
+      tests/bench/hostprofile.sh (show, check, apply, defaults); no Kent service and no
+      bench job changes them, and bench jobs refuse to measure unless `check` passes
+      after kent-llama is stopped. The conformance check asserts that no tuning unit
+      exists.
   - version: 3.2.7
     date: 2026-10-03
     summary: >
@@ -115,8 +130,8 @@ changelog:
       is SHA-256-checked against an install-time record before every load. A
       polkit rule lets kent-operators start/stop/restart that one unit
       (`kent llama`, audited); a root oneshot applies and restores the CPU tuning
-      (SMT, boost). Addresses audit finding F-09 (model file permissions and
-      integrity).
+      (SMT, boost; retired in 3.2.8). Addresses audit finding F-09 (model file
+      permissions and integrity).
   - version: 3.1.0
     date: 2026-09-28
     summary: >
@@ -338,8 +353,11 @@ after `udisks2.service` (released first at shutdown) and unmounted lazily, so a 
 never stalls shutdown. Known limit: in lab the operator owns the model files, so a file could be
 swapped between the start-time hash check and the server opening it (hardened: root only).
 `kent-admin models rehash` after replacing a model logs one audit line per added, changed or removed file with the operator's
-name (`human:<name>`) and keeps the previous record as `models.sha256.<UTC time>`. SMT and
-CPU boost are switched off by a root oneshot while the server runs and restored after.
+name (`human:<name>`) and keeps the previous record as `models.sha256.<UTC time>`. Starting or
+stopping the server changes no host performance setting (3.2.8): SMT, CPU boost, the CPU governor,
+swap and the GPU clock lock are set only by the operator, by hand, with `tests/bench/hostprofile.sh`
+(`show` and `check` need no root; `apply` sets the bench profile and `defaults` the boot defaults,
+both with sudo). The llama.cpp settings were measured with SMT off and boost off.
 
 ### 2.5 Reference Hardware
 

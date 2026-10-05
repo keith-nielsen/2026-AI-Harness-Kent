@@ -13,8 +13,9 @@
 #            when selected with --set); the service refuses to load a file
 #            whose hash does not match.
 #   mount    srv-kent-models.mount: MODELS_DIR bound read-only at /srv/kent/models (ro,nodev,nosuid,noexec)
-#   units    kent-llama.service (127.0.0.1:8080, hardened, not enabled at boot) and
-#            kent-llama-tuning.service (root oneshot: SMT/boost off while the server runs, restored after)
+#   units    kent-llama.service (127.0.0.1:8080, hardened, not enabled at boot). It changes no host
+#            performance setting (SMT, boost, governor, swap, GPU clocks): the operator sets those by
+#            hand with tests/bench/hostprofile.sh. An earlier kent-llama-tuning.service is retired.
 #   polkit   60-kent-llama.rules: kent-operators may start/stop/restart kent-llama.service, nothing else
 #   config   /etc/kent/llama/llama.env (settings; see kent_llama_launch.py)
 #
@@ -51,7 +52,7 @@ while [[ $# -gt 0 ]]; do
 done
 export DRY_RUN; require_root
 
-KEYS="MODEL_SET CTX UB NCMOE THINK ALIAS PIN CORES FORCE_256K TUNE"
+KEYS="MODEL_SET CTX UB NCMOE THINK ALIAS PIN CORES FORCE_256K"
 set_value() {  # set_value KEY=VALUE — validated against the launcher before it is written
     local key="${1%%=*}" val="${1#*=}"
     [[ "$1" == *=* && " $KEYS " == *" $key "* ]] || die "--set takes KEY=VALUE with KEY one of: $KEYS"
@@ -222,7 +223,7 @@ fi
 run install -m 0755 -o root -g root "$HERE/bin/kent_llama_launch.py" "$OPT/libexec/kent-llama-launch"
 run install -m 0755 -o root -g root "$HERE/bin/kent_llama_hashes.py" "$OPT/libexec/kent-llama-hashes"
 run install -m 0755 -o root -g root "$HERE/bin/kent_llama_source.py" "$OPT/libexec/kent-llama-source"
-for s in kent-llama-verify kent-llama-wait kent-llama-tuning; do
+for s in kent-llama-verify kent-llama-wait; do
     run install -m 0755 -o root -g root "$HERE/libexec/$s" "$OPT/libexec/$s"
 done
 
@@ -250,11 +251,33 @@ if findmnt -rn "$MNT" >/dev/null && [[ "$(current_models_dir)" != "$MODELS_DIR" 
 fi
 place_file unit "$WORK/$MOUNT_UNIT" "/etc/systemd/system/$MOUNT_UNIT" 0644 root root
 
+# Retired 2026-10-05: kent-llama-tuning.service switched SMT/boost off when kent-llama started and wrote
+# the boot values back when it stopped, so every stop silently turned CPU boost on. No Kent service
+# touches host performance settings any more; this removes the old unit from an earlier install and
+# leaves SMT and boost exactly as they are at that moment. Order matters: the new kent-llama.service
+# (no Requires= on the tuning unit) is loaded first, so stopping the tuning unit cannot stop the
+# server; and the tuning script is deleted before the stop, so its ExecStop (restore) cannot run.
+retire_tuning() {
+    local unit=/etc/systemd/system/kent-llama-tuning.service mf; mf="$(manifest_file)"
+    [[ -e "$unit" || -e "$OPT/libexec/kent-llama-tuning" ]] || return 0
+    local before; before="smt=$(cat /sys/devices/system/cpu/smt/control 2>/dev/null) boost=$(cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null)"
+    run rm -f "$OPT/libexec/kent-llama-tuning"
+    run systemctl stop kent-llama-tuning.service 2>/dev/null || true
+    run systemctl reset-failed kent-llama-tuning.service 2>/dev/null || true
+    run rm -f "$unit"
+    if [[ "$DRY_RUN" -eq 1 ]]; then echo "  [dry-run] manifest -= unit $unit"
+    elif [[ -f "$mf" ]]; then grep -vxF "unit $unit" "$mf" > "$mf.tmp" || true; mv "$mf.tmp" "$mf"; fi
+    run systemctl daemon-reload
+    local after; after="smt=$(cat /sys/devices/system/cpu/smt/control 2>/dev/null) boost=$(cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null)"
+    log "retired kent-llama-tuning.service; host settings untouched ($before -> $after)"
+    audit_event "retired kent-llama-tuning.service ($after)"
+}
+
 # --- Units and the operators' start/stop permission ---
-place_file unit "$HERE/systemd/kent-llama-tuning.service" /etc/systemd/system/kent-llama-tuning.service 0644 root root
 place_file unit "$HERE/systemd/$UNIT" "/etc/systemd/system/$UNIT" 0644 root root
 place_file file "$HERE/60-kent-llama.rules" "$RULE" 0644 root root
 run systemctl daemon-reload
+retire_tuning
 
 if [[ "$START" -eq 1 && "$DRY_RUN" -eq 0 ]]; then
     long_step "starting $UNIT — checks the model hashes and loads the model, a minute or two"
