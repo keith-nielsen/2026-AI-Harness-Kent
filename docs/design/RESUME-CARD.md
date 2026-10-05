@@ -34,6 +34,11 @@ single request, tok/s edit/agentic/prose (none 30.85/30.40/33.36): n1 -tb5 36.56
 41.45/38.26/26.87 (prose -19%). Two slots at once (edit+agentic), aggregate: none 31.94, n1 -tb5 33.65 (+5%),
 n2 -tb5 36.28 (+14%). Candidate production: draft-mtp n_max 2, p_min 0.8, -tb 5. Open: n2 p0.8 under 2 slots;
 quality (probes/kent/crews) with that setting; then launcher/llama.env change + reinstall (operator's sudo).
+**-tb VALIDATION (tbcheck-10051758, 17:58-18:25, A-B-B-A, rule fixed before):** -tb 4 vs default (= -t 5):
+decode 2 at once -8.0% (24.7-25.7 vs 27.1-27.6), edit+agentic at once -3.3% on matched text, prefill 16k 0.0%,
+-0.7% (2 at once), interference +0.6/+0.1%, single decode -0.6% (control). VERDICT: remove -tb 4 -> done in the
+launcher (architecture 3.2.9); live after reinstall + restart. Finding: concurrent requests are NOT deterministic
+(identical inputs gave 2949 or 2995 tokens by timing) — compare pair runs on matched text only.
 Also fixed: lib-preflight PREFLIGHT_KINDS lacked `acl` (from the 10-04 sandbox install) — CI test failed.
 
 ## 2026-10-05 (llama.cpp build bake-off: planned, not started) — superseded

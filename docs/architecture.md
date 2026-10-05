@@ -1,12 +1,23 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.8
+version: 3.2.9
 date: 2026-10-05
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.9
+    date: 2026-10-05
+    summary: >
+      The local model server no longer overrides its batch thread count (`-tb 4`
+      removed; llama.cpp then uses `-t`, 5). Every pass with more than one token
+      uses the batch threads, including each step while both slots are generating.
+      A formal A-B-B-A comparison under the bench host profile (tests/bench/tbcheck.sh,
+      decision rule fixed beforehand: keep the override only if it is 3% faster
+      somewhere and not 3% slower anywhere) found -tb 4 8% slower for two concurrent
+      decodes and 3% slower for concurrent real workloads, and no faster anywhere
+      (prompt processing identical).
   - version: 3.2.8
     date: 2026-10-05
     summary: >

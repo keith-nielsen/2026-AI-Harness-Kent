@@ -30,7 +30,7 @@ def test_defaults_are_the_measured_256k_profile():
 def test_two_slots_share_one_kv_cache_and_log_errors_only():
     a = L.build_argv({})
     assert opt(a, "--parallel") == "2" and "-kvu" in a and opt(a, "-lv") == "1"
-    assert opt(a, "-t") == "5" and opt(a, "-tb") == "4"
+    assert opt(a, "-t") == "5" and "-tb" not in a   # batch threads default to -t (tbcheck 2026-10-05)
 
 
 def test_listens_on_loopback_only():

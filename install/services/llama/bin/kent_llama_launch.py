@@ -5,7 +5,8 @@ Ported from the operator's measured launcher (llamaserver-qwen36-optimum.sh, 202
 the reasoning behind every number is in that script's header. Two slots with a unified KV cache
 (2026-09-30 tuning pass): two requests run at once, each can use the whole context, and a single
 stream keeps ~97% of its one-slot speed; total decode is capped at ~35 tok/s by the CPU experts,
-so more slots only split it. The measurements assumed SMT off and CPU boost off; those host settings
+so more slots only split it. Batch threads follow -t (5): -tb 4 was removed on 2026-10-05 (tests/bench/tbcheck.sh:
+-8% when both slots decode, no gain anywhere). The measurements assumed SMT off and CPU boost off; those host settings
 are not changed by Kent (no service touches them since 2026-10-05): the operator sets them by hand with
 tests/bench/hostprofile.sh.
 
@@ -85,7 +86,9 @@ def build_argv(env: dict) -> list[str]:
             "-m", model, "--alias", alias,
             "-mm", mmproj, "--no-mmproj-offload",
             "-ngl", "99", "-ncmoe", str(ncmoe), "-c", str(nctx),
-            "-t", "5", "-tb", "4", "-ub", str(ub),
+            # No -tb: batch threads default to -t. The former -tb 4 was 8% slower when both slots decode
+            # (2-token batches) and no faster anywhere (tbcheck, 2026-10-05).
+            "-t", "5", "-ub", str(ub),
             "--jinja", "--no-mmap", "--parallel", "2", "-kvu",
             "-fa", "on", "-ctk", ctk, "-ctv", ctv,
             "--spec-type", "none",
