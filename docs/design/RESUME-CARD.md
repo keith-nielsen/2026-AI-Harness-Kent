@@ -1,6 +1,139 @@
 # Resume card — Kent harness
 
-## START HERE — 2026-10-04 (Kent sandbox B installed, committed, measured)
+## START HERE — 2026-10-05 evening (host tuning retired; MTP explained)
+
+**Operator's rule:** no Kent service and no bench job changes host performance settings. SMT, CPU boost,
+governor, swap and GPU clock lock are set ONLY by hand: `tests/bench/hostprofile.sh show|check` (no root),
+`sudo tests/bench/hostprofile.sh apply` (bench profile: SMT off, boost 0, performance, swap off, GPU pm 1 +
+lgc 1650) or `defaults` (boot defaults). Bench jobs (mtpcheck, speccheck) run `check` AFTER `kent llama stop`
+and refuse on a mismatch; `check` measures the real core clock (tests/perf/clockcheck.c).
+
+**Why:** kent-llama-tuning.service (PartOf kent-llama) wrote boot values back on every stop, so every bench
+that stopped kent-llama ran with boost ON (~3.95 GHz, 82-86 C). I had told the operator "boost is off"
+(read while kent-llama ran). Retired in architecture 3.2.8; installer `retire_tuning` deletes the script
+before stopping the unit (no restore), after loading the new kent-llama.service (no Requires=).
+Boot defaults come from firmware (BIOS SMT + CPB enabled), the kernel (schedutil); nothing else on the host
+touches them (checked tmpfiles, udev, sysctl, units; power-profiles-daemon has only its placeholder driver).
+
+**State now:** repo changed + committed/pushed (see git log); **the live host still has the old tuning unit
+until the operator reinstalls the llama module** (`sudo install/services/llama/install.sh --no-start`).
+Manual test settings still in effect: governor performance, swap off, GPU locked 1650 (operator: keep for
+testing). MTP result valid only relatively (boost was on): rerun mtpcheck under `hostprofile.sh apply`.
+Also fixed: lib-preflight PREFLIGHT_KINDS lacked `acl` (from the 10-04 sandbox install) — CI test failed.
+
+## 2026-10-05 (llama.cpp build bake-off: planned, not started) — superseded
+
+**State.** No bench job. Bench mode ON. **kent-llama is RUNNING** (someone started it after 10-04; the bench
+job stops it and restarts it at the end). Sandbox work from 10-04 (below) is still open — operator's tests.
+
+**Why this work.** Review of Strata (github.com/Niko1221/Strata, custom 125B Qwen3.8-Flash-Next engine): its speed
+comes from a hot-expert GPU cache, CPU/GPU split of expert misses, MTP drafting with a confidence gate, prompt
+lookup (n-gram) drafting, big prefill chunks, KV in RAM, system-prompt checkpoints. Its "experimental speed
+projection" is a refusal-ablation vector — never near Kent. On our box (RTX 2060S 8 GB Turing, Ryzen 3700X AVX2,
+62 GB DDR4, PCIe 3) only drafting, checkpoints and an expert cache are candidates. Then Edge0 review (below, Next 0).
+
+**llama.cpp builds compared** (2026-10-04):
+| build | date / upstream sync | has | lacks |
+|---|---|---|---|
+| current: TheTom/llama-cpp-turboquant c26cbdf (/opt/kent-llama) | 07-18 / 07-19 | turbo3 KV, MTP | all below |
+| fork tip bcb85fc | 09-28 / 08-06 | turbo3, `--moe-cache` (Qwen3.6 +8.3% upstream-measured), kv-stream (np 1, no prompt cache: not for us) | upstream spec fixes |
+| upstream master 0504396 | 10-04 | spec fixes #27694 (MTP probabilistic sampling), #29924 (n-gram drafts rejected at temp>0), #28549, #27621, #29184, #25952, #28302, #29638; `/v1/systemone` (JEV decision models) | turbo3, moe-cache |
+| upstream + parallel-decision (thecodacus b9244f8 14d04e7 ad129b0) | hand merge | `/v1/decision` on any model | 3 small conflicts (server-context.h, server-task.h, server.cpp) |
+MoE cache on Turing needs `--moe-cache on`, `GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB=512`, lower `..._RESERVE_MB` (~1 GB left).
+Memory: [[parallel-decision]] = what "parallel-decode" means.
+
+**Built and tested (uncommitted):** `tests/perf/spec_bench.py` (edit / agentic / prose workloads, 3 sampled + 1
+greedy, draft acceptance; smoke-tested on the live server 10-04: works), `tests/perf/cache_bench.py` (prefix reuse:
+A1 A2 B1 B2 A3 C1+D1; syntax only), `tests/bench/speccheck.sh` (fit probe 256k else 128k; variants none,
+ngram-simple, ngram-mod, mtp n1 p0 / n1 p0.8 / n2 p0.8; two-slot llama_bench for winners; cache variants default,
+-cms 0, -cram 0), `watch.py` now follows `speccheck:` lines. Scratch: Strata, llama-up (upstream), pd clones.
+
+**Edge0 review (done 2026-10-05; github.com/Edge0-AI/Edge0 @9a56e4d, paper arXiv 2609.18063):**
+- edge0-35b IS Qwen3.6-35B-A3B (our model) at **K=4** (native K=8), int4 affine g64, recovery LoRA r16/α32 on
+  attention, linear-attention and shared-expert projections (not routed experts), 33 prerouter heads.
+- Quality (their OpenCompass, MLX pipeline): avg 79.2 vs fp16 83.2; IFBench 57.9 vs 61.7; AIME −6.1.
+- Their Windows engine = stock llama.cpp b11100 + 8 hook patches + Vulkan, `-cmoe`; converts MLX → GGUF Q4_1
+  bit-exact (`windows/tools/repack_r3.py`, writes `expert_used_count=4`) and LoRA → llama.cpp adapter GGUF
+  (`lora_mlx_to_gguf.py`). Platform-independent Python/numpy. Windows prerouter is advisory prefetch only;
+  their own A/B: patches cost/gain nothing with warm RAM (35B 27.2 vs 27.4 tok/s).
+- **Applies to us:** K=4 routing width (paper: K8→K4 nearly doubles decode when expert-bound; our decode IS CPU
+  expert-bound) via `--override-kv qwen35moe.expert_used_count=int:4`; their GGUF+LoRA run in stock llama.cpp
+  `--lora`. Caveat: the LoRA was trained with prerouter-as-routing (MLX student path); llama.cpp uses the true
+  router at K=4 — quality on that path is unmeasured by them.
+- **Does not apply:** SSD offload and prerouter (our 21 GB model is RAM-resident with --no-mmap; gains need
+  storage latency — only relevant for a > RAM model such as Qwen3.8-Flash-Next); Android moe_pool (NEON/ARM);
+  mem-budget patch (Windows working set); MLX incr_stack / slot assembly (MLX graph cost, not llama.cpp).
+
+**Prep (2026-10-05, operator: "pull down their model, line up K=4 with the other tests on the new builds"):**
+- Sources pinned in `~/Documents/repo/bench/llama-builds/`: `forktip` (bcb85fc), `upstream` (0504396),
+  `upstream-pd` (upstream + c5c70ed/83c05dd/ab8f0a7 = parallel-decision; my hand merge: both sides kept in
+  server-context.h / server.cpp, branch's task type renamed `SERVER_TASK_TYPE_PARALLEL_DECISION`, its result
+  struct `server_task_result_parallel_decision`). Edge0 converter copied to `bench/edge0-tools` (Edge0 9a56e4d).
+- `tests/bench/llamaprep.sh` (submit name `llamaprep`): downloads Edge0-35B-A3B-preview @3fe15cb (SHA-256 pinned)
+  while building the three (CUDA sm_75, current flags), then converts → `Edge0-35B-A3B-preview-Q4_1.gguf` +
+  `…-lora-F16.gguf` in DATA/models (0444). Log: `bench/runs/llamaprep-*/llamaprep-check.log`.
+- Installed 13:35: Edge0-35B-A3B-preview-Q4_1.gguf sha256 bea9da8b…c5ff1cb, lora-F16.gguf caa1df4a…ce8e38e (both
+  gates GREEN). Prep failures fixed on the way: numpy (PY=~/ai-env), gguf-py (PYTHONPATH), base-path symlink
+  bench/models/edge0-35b-gguf, oomd (kent-llama stopped during conversion).
+- Risk: Edge0's GGUF declares arch `qwen3next` + explicit recurrent_layers (upstream support since 09-07); it may
+  not load on current/forktip — the bench job must load-probe and skip, not fail.
+- Port fix: parallel-decision used `common_batch_clear/add`, removed upstream by #29385 → local copies in
+  decision-engine.cpp (commit b11c81b); CPU compile check passed (llama-server + llama-parallel-decision).
+- **Submitted 2026-10-05: `kent-bench-llamaprep`** (watch.py monitor). Then submit:
+  `tests/bench/submit.sh speccheck speccheck.sh "current forktip upstream" "spec k4 moe cache"` (~6 h;
+  speccheck.sh now takes BUILDS + SETS; k4 = stock K=4 override, Edge0 K=4 ± LoRA, Edge0 K=8).
+- **Job queue (2026-10-05 ~13:00, each waits for the ones before):** `llamaprep` → `speccheck` ("current forktip
+  upstream" "spec k4 moe cache", ~6 h) → `decision` (speccheck.sh upstream-pd decision: tests/perf/decision_bench.py,
+  router tiers incl. injections + validator PASS/FAIL, /v1/decision vs chat) → `k4quality` (campaign.sh k4-quality
+  "stock stock-k4 edge0-k4-lora edge0-k4" "probes kent crews" v1 1, ~4 h; mutt.sh gained these entries with
+  per-model extra args and binary; Edge0 SHA read from its conversion manifest). Watch: one watch.py monitor.
+  Results: runs/speccheck-*/, runs/k4-quality/. Then: one table to the operator.
+- (superseded) After prep: extend speccheck.sh with `BUILD=` and the K=4 variants (stock + override K=4; Edge0 Q4_1 K=4 with
+  and without LoRA), then quality (probes/kent/crews via mutt.sh: needs extra args for `--lora`/override).
+
+**⚠ GPU CLOCK LOCKED (operator's choice, 2026-10-05):** `nvidia-smi -pm 1` + `-lgc 1650,1650` for the MTP
+investigation. Undo: `sudo nvidia-smi -rgc && sudo nvidia-smi -pm 0` (a reboot also clears it). Dry run
+(tests/perf/gpu_lock_dryrun.py, 10 s fp16 burst): unlocked 1470-1845 MHz, 169 W (guard stop at 0.6 s); locked 1650
+MHz in all samples, 140 W max, 65 C, no power/thermal counter change. **Also set for the run (operator's sudo,
+~16:00): CPU governor performance, swap OFF.** Undo: `sudo cpupower frequency-set -g schedutil` and `sudo swapon -a`.
+
+**MTP investigation (operator: "get to the deterministic bottom"):** n1 = 2.05x a plain step, n2 = 2.59x (edit,
+all drafts accepted). Found: (1) spec_bench's nonce made greedy texts incomparable (fixed: workloads.py +
+mtp_probe.py, cache_n checked); (2) **every multi-token step runs on -tb threads (4), single-token on -t (5)**
+(src/llama-context.cpp:1362) — prime suspect. Plan: llama-bench step cost N=1..8 at -t 4 and 5; MTP n1-4 x p0/p0.8
+(+ -tb 5) x 3 shuffled rounds with sysmon.py flags (swap, majflt, other load, CPU MHz, GPU clock/counters).
+
+**MTP RESULT (mtpcheck-10051504, 15:26; performance governor, swap off, GPU 1650 locked, fixed greedy prompts):**
+step = check pass(N) + ~2.8 ms + **~6.6 ms per draft** (MTP head). Pass cost (llama-bench, depth 2048): N=1 29.1,
+N=2 41.7 (1.43x), N=3 55.8, N=4 67.9 ms at -t 5; -t 4 is 7-11% slower. Edit tok/s: none 31.6, n1 36.7 (+16%),
+n2 39.1 (+24%), n3 40.7 (+29%), n1 -tb5 38.1; agentic: none 31.1, n1 35.6, n2 37.3, n3 37.5, n1-tb5 37.3. Edit text
+token-identical to none in every variant. This afternoon's "n1 flat" (63.6 ms/step) was the system (schedutil +
+swap; not separated): now 54.4 ms/step. Boost is NOT actually off (1-cycle add chain: 3.9-3.96 GHz; driver says
+inactive) — consistent across variants here, but a separate issue. Not yet measured: prose; n2/n3 at -tb 5; p_min.
+
+**STOPPED by the operator 2026-10-05 14:33.** No bench job; kent-llama running (production). Partial results in
+`bench/runs/speccheck-10051336/` (current build only; spec_bench tok/s edit / agentic / prose):
+none 32.3/32.5/34.5 · ngram-simple 44.6/**11.8**/33.2 (acc .89/.14) · ngram-mod 48.0/32.4/**22.4** (acc .88/.53/.19) ·
+MTP n1 p0 31.4/30.8/27.9 · MTP n1 p0.8 31.4/34.1/31.8 · **MTP n2 p0.8 37.3/35.9/32.0** (acc 1.0/.99/.90, best MTP).
+Two-slot check of `none` interrupted. Not run: k4 set, moe, cache, forktip, upstream, decision, k4quality.
+speccheck.sh now has RUN_DIR resume (3rd arg) and no MTP n2 — **n2 should be restored** (it beat n1; my
+"verify cost cancels the gain" reasoning was wrong for 2 drafts). Open question to the operator: restore n2, add n3?
+Edge0 GGUF + LoRA installed; three builds built. To resume: submit speccheck.sh with the RUN_DIR above.
+
+**Next (operator said go on the bench; builds awaiting go):**
+0. K=4 tests (cheap first): (a) speed: current build + `--override-kv qwen35moe.expert_used_count=int:4`;
+   (b) quality: same on the probes/kent/crews bench vs K=8 (conformance is the known risk); (c) if (b) hurts:
+   Edge0-35B-A3B-preview download (~23 GB; DATA has 151 GB free) → repack to GGUF Q4_1 + LoRA adapter → bench
+   K=4+LoRA vs K=8 stock.
+1. Build 3 candidates in the scratchpad (fork tip, upstream, upstream+parallel-decision), ~30-40 min each, no
+   install/sudo. Add `BUILD=` to speccheck.sh (upstream: -ctv q8_0; fork tip: + moe-cache variant).
+2. Submit one job (`submit.sh`, one watch.py monitor) benching current, fork tip, upstream (~4-5 h).
+3. Decision test on build 3: Gent PASS/FAIL + router choice via `/v1/decision` vs chat (latency, agreement).
+4. One table to the operator; they decide adopt/recompile.
+
+---
+
+## 2026-10-04 (Kent sandbox B installed, committed, measured) — superseded by START HERE above
 
 **State.** No bench job. **Bench mode ON, kent-llama STOPPED, bench model server stopped** (start the
 local model with `kent llama start`). Branch `release/v0.1.0`, last commits `9cb7ed4` (docs: safety under
