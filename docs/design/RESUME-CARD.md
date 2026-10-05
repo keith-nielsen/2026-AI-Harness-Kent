@@ -1,6 +1,35 @@
 # Resume card — Kent harness
 
-## START HERE — 2026-10-05 evening (host tuning retired; MTP explained)
+## START HERE — 2026-10-06 morning (overnight bench complete; production decision pending)
+
+**State:** no bench job; kent-llama running (production, still -tb 4, no MTP); bench mode ON; host profile = bench
+(performance governor, swap OFF, GPU locked 1650) — restore with `sudo tests/bench/hostprofile.sh defaults` when
+done benching. `-tb 4` removal is committed (3.2.9) but NOT deployed (needs `sudo install/services/llama/install.sh`).
+
+**Overnight results (all under hostprofile check, clean unless noted):**
+- Depth, Q4 at 256k (depthcheck-10060026 + -10060548), decode tok/s 8/16/32/64K, copy | prose:
+  none 27.3/23.1/17.6/11.9 | 27.2/23.0/17.5/11.8 · MTP1 35.7/34.2/32.8/28.8 | 32.3/31.8/29.9/27.7 ·
+  MTP2 p0.8 36.8/34.4/32.4/25.6 | 30.7/29.0/24.6/19.6 · **MTP2 p0 36.6/34.7/33.4/32.2 | 29.0/29.3/27.1/26.3**.
+  No-MTP decode more than halves 8->64K; MTP ~2-2.7x at 64K; the threshold hurts at depth. Prefill unaffected
+  (491->414 tok/s; TTFT 16.5 s at 8K, 158 s at 64K).
+- Q6 + MTP2 p0.8: **out of GPU memory at 256k on 16K+ prompts** (reproducible); at 128k (depthcheck-10060455) all
+  64K fine: copy 31.5/28.6/28.5/24.5, prose 26.7/25.0/21.8/18.6 (-8..-15% vs Q4+MTP, equal at 64K copy); prefill
+  375->323 tok/s.
+- Two slots at once (mtpcheck-10060315, -tb 5, text identical across rounds): none 34.96, MTP2 p0.8 39.80 (+13.8%),
+  MTP2 p0 40.12 (+14.8%).
+- Quality v1 (1 run each): Q4+MTP2 p0.8 24/47, Q6+MTP2 p0.8 24/47, Q4 19/47, **Q4 K=4 15/47, Edge0 K=4+LoRA 13/47**.
+- Edge0 (edge0check-10060309, upstream build, loads; LoRA confirmed via /lora-adapters): +LoRA 40.8/41.2/41.4,
+  no LoRA 48.6/49.0/50.0 (LoRA costs ~17% in llama.cpp). Q4 K=4: +28% speed, clear quality loss. Not pursued.
+- **Build (edge0check-10060632, same session): upstream vs production, our Q4: +11/+11/+4% (K=8), +14/+15/+5% (K=4)**
+  (upstream uses q8_0 V: no turbo3). Most of Edge0's speed edge was the newer build.
+
+**Recommendation for the operator:** production = MTP 2 drafts, no threshold (p_min 0), no -tb (=5), Q4, 256k
+(MTP1 is the close alternative: best on prose); separately evaluate moving to the upstream build (+11%, but loses
+turbo3 V -> more VRAM; needs a fit check with MTP at 256k). Q6+MTP only at 128k.
+
+---
+
+## 2026-10-05 evening (host tuning retired; MTP explained) — superseded
 
 **Operator's rule:** no Kent service and no bench job changes host performance settings. SMT, CPU boost,
 governor, swap and GPU clock lock are set ONLY by hand: `tests/bench/hostprofile.sh show|check` (no root),
