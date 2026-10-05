@@ -28,6 +28,12 @@ n2 36.80/34.75; n3 38.64/34.91. Step = pass(N) + ~3 ms + ~7-8 ms per draft. Pass
 42.8 / 56.8 / 70.8 ms for N=1-4 (-t 4: +5-12%). Rounds agree to 0.1-1.4%; text divergence from `none` is
 deterministic (same char each round). Next before production: prose, n2/n3 at -tb 5, 2-slot concurrency.
 Note: the edit prompt embeds kent_llama_launch.py (edited today) -> edit token counts differ across days.
+**MTP FINAL CHECKS (mtpcheck-10051706, 17:06-17:47, hostprofile OK, 3 requests excluded for other load):**
+single request, tok/s edit/agentic/prose (none 30.85/30.40/33.36): n1 -tb5 36.56/35.41/34.38; n1 p0.8 -tb5
+36.71/35.42/33.56; n2 -tb5 39.47/37.09/31.21 (prose -6%); **n2 p0.8 -tb5 39.30/36.98/33.00 (+27/+22/-1%)**; n3 -tb5
+41.45/38.26/26.87 (prose -19%). Two slots at once (edit+agentic), aggregate: none 31.94, n1 -tb5 33.65 (+5%),
+n2 -tb5 36.28 (+14%). Candidate production: draft-mtp n_max 2, p_min 0.8, -tb 5. Open: n2 p0.8 under 2 slots;
+quality (probes/kent/crews) with that setting; then launcher/llama.env change + reinstall (operator's sudo).
 Also fixed: lib-preflight PREFLIGHT_KINDS lacked `acl` (from the 10-04 sandbox install) — CI test failed.
 
 ## 2026-10-05 (llama.cpp build bake-off: planned, not started) — superseded
