@@ -47,6 +47,13 @@ Q6 (+37 / +33 / +7%) than Q4; Q6+MTP beats today's production (Q4, no MTP: 30.85
 and agentic (+9%), -12% on prose. Quality (10-02, pre-MTP, 2 reps): Q6 beat Q4 on every measure (probes 186 vs
 180/230, crews 8 vs 6/12, pass^2 108 vs 100, flips 10 vs 17); Q8 28/47 vs Q6 21/47 (one run). Open: quality
 with MTP. Operator: much less interested in the -tb question.
+**OVERNIGHT QUEUE (queued 22:05, operator asleep; Chromium + Discord closed after they tainted most of depth run 1):**
+depth (run 1, finishing) -> `edge0` (tests/bench/edge0check.sh: Edge0 K=4 +/- LoRA on upstream build, Q4 K=4, Q4;
+load log + speed, ~25 min) -> `mtpquality` (campaign mtp-quality "stock stock-mtp q6-mtp" probes/kent/crews v1;
+mutt.sh: stock-mtp/q6-mtp = MTP 2 p0.8, q6-mtp at 128k, no -tb anywhere now) -> `depth2` (clean depthcheck rerun,
+2 rounds). The Edge0 4-h quality campaign was dropped: Edge0 has no MTP head and its LoRA targets their routing;
+run it only if K=4 is substantially faster. Depth run 1: other-load flags 19:22-21:37 (Chromium) on all MTP rows;
+interim: no-MTP decode fell to ~11.5 tok/s at 64K (suspect, taint), MTP held 24-30; MTP1 held prose better at depth.
 Also fixed: lib-preflight PREFLIGHT_KINDS lacked `acl` (from the 10-04 sandbox install) — CI test failed.
 
 ## 2026-10-05 (llama.cpp build bake-off: planned, not started) — superseded
