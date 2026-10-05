@@ -23,7 +23,7 @@ PREFLIGHT_FUSER="${KENT_FUSER:-fuser}"                 # overridden only by test
 PREFLIGHT_PS="${KENT_PS:-ps}"                          # overridden only by tests
 PREFLIGHT_DOCKER="${KENT_DOCKER:-docker}"              # overridden only by tests
 # Every kind lib-service.sh's uninstall_module or a module's pre_uninstall understands.
-PREFLIGHT_KINDS="user group path dir file unit dropin state package enabled unitstate moved member userunit modelsdir modelsmode dockernet dockerimage dockerbase ufwrule"
+PREFLIGHT_KINDS="user group path dir file unit dropin state package enabled unitstate moved member userunit modelsdir modelsmode dockernet dockerimage dockerbase ufwrule acl"
 
 _pf_entries() {  # _pf_entries <kind>: values of that kind across all manifests
     awk -v k="$1" '$1 == k { $1 = ""; sub(/^ /, ""); print }' "$PREFLIGHT_MANIFEST_DIR"/* 2>/dev/null
