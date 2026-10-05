@@ -15,8 +15,11 @@ before stopping the unit (no restore), after loading the new kent-llama.service 
 Boot defaults come from firmware (BIOS SMT + CPB enabled), the kernel (schedutil); nothing else on the host
 touches them (checked tmpfiles, udev, sysctl, units; power-profiles-daemon has only its placeholder driver).
 
-**State now:** repo changed + committed/pushed (see git log); **the live host still has the old tuning unit
-until the operator reinstalls the llama module** (`sudo install/services/llama/install.sh --no-start`).
+**State now:** repo committed/pushed, CI green. Live host: llama module reinstalled 16:25 (operator's sudo);
+tuning unit + script gone, retired without its restore (journal: 203/EXEC), kent-llama.service Requires only
+the mount. **Verified by tests/bench/lifecyclecheck.sh (16:27-16:29, PASS):** boost 0 / SMT off / clock
+~3.55 GHz before, after `kent llama stop`, under a test-server workload, after it, after `kent llama start`;
+no tuning journal activity. Agentic workload at true base clock: 29.6 tok/s (boosted run: 31.1).
 Manual test settings still in effect: governor performance, swap off, GPU locked 1650 (operator: keep for
 testing). MTP result valid only relatively (boost was on): rerun mtpcheck under `hostprofile.sh apply`.
 Also fixed: lib-preflight PREFLIGHT_KINDS lacked `acl` (from the 10-04 sandbox install) — CI test failed.
