@@ -12,7 +12,7 @@
 #   sudo ./kent-admin set-anthropic-key       store the Anthropic key for the gateway (prompted,
 #                                             hidden; kept in /etc/kent/litellm/credentials, root 0600)
 #   sudo ./kent-admin llama set KEY=VALUE     local model server setting (MODEL_SET, CTX, UB, NCMOE,
-#                                             THINK, ALIAS, PIN, CORES, TUNE); operators then run
+#                                             THINK, ALIAS, PIN, CORES, FORCE_256K); operators then run
 #                                             `kent llama restart`
 #   sudo ./kent-admin models rehash           after replacing a selected model file: re-apply
 #                                             the profile's models mode and re-record SHA-256 hashes
