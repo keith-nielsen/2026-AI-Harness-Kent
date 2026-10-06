@@ -23,6 +23,19 @@ done benching. `-tb 4` removal is committed (3.2.9) but NOT deployed (needs `sud
 - **Build (edge0check-10060632, same session): upstream vs production, our Q4: +11/+11/+4% (K=8), +14/+15/+5% (K=4)**
   (upstream uses q8_0 V: no turbo3). Most of Edge0's speed edge was the newer build.
 
+**Where everything is (for a fresh session):**
+- Results index: `~/Documents/repo/bench/runs/INDEX-2026-10-05.md` (every run folder, validity, key numbers, files).
+- Tracked tools: `tests/bench/hostprofile.sh` (show/check no root; apply/defaults sudo), `tests/perf/clockcheck.c`.
+- Bench scripts (untracked by design, on disk): `tests/bench/` speccheck.sh, mtpcheck.sh (sets lean|final|q6|pair),
+  tbcheck.sh, depthcheck.sh (ROUNDS [VARIANTS] [CTX]), edge0check.sh ([VARIANTS]), lifecyclecheck.sh, llamaprep.sh,
+  mutt.sh (+ stock-mtp, q6-mtp, stock-k4, edge0-*), watch.py; `tests/perf/` sysmon.py (user/kernel/irq split, flags),
+  mtp_probe.py (CONCURRENT=1 pairs), depth_probe.py, workloads.py, spec_bench.py, cache_bench.py, decision_bench.py,
+  gpu_lock_dryrun.py, and reports mtp_report.py, tb_report.py, depth_report.py. Launch only via `tests/bench/submit.sh`.
+- Builds: `~/Documents/repo/bench/llama-builds/` forktip (bcb85fc), upstream (0504396; no --no-mmap -> `-lm none`;
+  no turbo3), upstream-pd (parallel-decision hand merge b11c81b). Frozen prompt corpus: `bench/corpus/kent-repo-1a9b067.txt`.
+- Edge0 model + LoRA GGUF in DATA/models (0444); converter `bench/edge0-tools`; reference repos and the Edge0 paper
+  text: `bench/reference/` (README lists commits).
+
 **Recommendation for the operator:** production = MTP 2 drafts, no threshold (p_min 0), no -tb (=5), Q4, 256k
 (MTP1 is the close alternative: best on prose); separately evaluate moving to the upstream build (+11%, but loses
 turbo3 V -> more VRAM; needs a fit check with MTP at 256k). Q6+MTP only at 128k.
