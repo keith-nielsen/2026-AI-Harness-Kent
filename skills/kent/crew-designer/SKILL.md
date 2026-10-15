@@ -128,7 +128,7 @@ On approval, generate the crew configuration files:
 
 1. Run the generation script:
    ```
-   python3 ${HERMES_SKILL_DIR}/scripts/generate_crew.py \
+   /usr/bin/python3 ${HERMES_SKILL_DIR}/scripts/generate_crew.py \
      --template <template_name> \
      --output-dir <staging_dir> \
      --project-name "<operator's project name>" \

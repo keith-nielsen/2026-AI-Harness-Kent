@@ -848,7 +848,7 @@ itself (sandboxed, §12.4): its Gent tools reach it through `kent-broker`, outsi
 |---|---|---|
 | Toolsets | incl. terminal, code execution, delegation | no code execution, no delegation |
 | Shell | general shell as `kent` (approval for dangerous commands) | plus denies for sudo, curl/wget, `python -c`, nc |
-| Both | tirith pre-exec scanning (pinned binary; fails open in lab, **closed** in hardened); one-shot and cron runs deny dangerous commands; yolo/oneshot re-entry, docker, managed-scope and credential paths denied; update checks off; secrets redacted | |
+| Both | Hermes' built-in dangerous-command detector (tirith left Hermes in v0.21.6); no runtime package installs; one-shot and cron runs deny dangerous commands; yolo/oneshot re-entry, docker, managed-scope and credential paths denied; update checks off; secrets redacted | |
 
 Switch with `sudo ./kent-admin profile lab|hardened`.
 
