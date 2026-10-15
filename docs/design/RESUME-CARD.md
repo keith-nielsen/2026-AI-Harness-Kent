@@ -1,6 +1,352 @@
 # Resume card — Kent harness
 
-## START HERE — 2026-10-06 morning (overnight bench complete; production decision pending)
+## OUTSTANDING WORK — read first (updated 2026-10-16 ~01:00, after reboot)
+
+**2026-10-16 status: conformance 149 PASS / 0 FAIL** (bench/runs/hermes-v0217-rollforward/conf-0217-fixed.log).
+Bench mode OFF (`kent-bench off`, all restored files + Kent state hash-verified; gateway back to sim-routed, its
+pre-10-03 flavour). kent-llama running. Operator plans overnight benchmarking -> `kent-bench on` first.
+Items 1 and 3 below are DONE; causes, all mine:
+- 3a SearXNG "down since 10-03 17:10" = bench mode (on 10-03 17:10:52, benchmode.sh stops it, fixture server on
+  :8888). The reboot dropped the transient fixture unit and SearXNG came back = half bench state until `off`.
+- 3b sudoers: commit 1cf57f7 (sandbox, 10-03) added `Defaults!…/kent-exec closefrom_override` (kent --grant);
+  the check was never updated. Fixed in conformance.py (expects both lines).
+- 3c Gent self-test: kent-gent-{egress,gateway,search}.socket never start at boot (ordering cycle: After=docker.service
+  vs sockets.target; journal 10-15 09:21). Fixed in install/services/gent/units (After= removed; FreeBind already
+  set), installed + started. Proof only at next reboot: check `systemctl is-active kent-gent-*.socket` after it.
+- 3d models drive: my `kent llama start` with the drive unmounted made systemd CREATE the missing bind source
+  (empty root-owned DATA/models) -> drive later came up as DATA1. Cleaned (rmdir), remounted as DATA. Also 4
+  Flash-Next files had write bits -> chmod a-w. TODO (needs go): `AssertPathIsDirectory=@SRC@` in
+  srv-kent-models.mount.in + run the drive diagnosis BEFORE systemctl in `kent llama start`; fstab = real fix.
+- New: `kent -q` with no model server just hangs (LiteLLM retries) — should fail fast. The "43 s regression" was
+  NOT one: cold runs (cache wiped by restarts/state swap) vs a warm 13.6 s; warm now 8.8 s. Normal = docs/design/BASELINE.md.
+Uncommitted additions: conformance.py sudoers check, 3 socket units, this card.
+**PRODUCTION MODEL DECIDED (operator, 2026-10-16):** Q4_K_XL MTP model, K q8_0 / V q4_0, **128k** (256k dropped),
+MTP 2 drafts p_min 0, draft cache f16, no -tb (-t 5), 2 slots -kvu, -rea off. **SWITCHED 2026-10-16 03:25** on
+upstream v0.6.0 (architecture 3.2.10). Record: bench/runs/prod-switch-v06-10160324 (install log, argv, req/load
+checks, conformance 149/0). Verified: MTP drafting (183/190 accepted), 2 slots 40.0 tok/s combined (bench 40.12),
+prose ~30 tok/s, peak VRAM 5827 MiB (both slots 16K prompts), image input OK with MTP, -t 5 = ~450% CPU in decode.
+Rollback: /opt/kent-llama.forkc26cbdf (rename back + `install.sh --set CTX=256k` would be needed: launcher has no
+256k now -> realistically reinstall from git history). llama.cpp **v0.7.0** released 2026-10-15 17:13Z: not adopted.
+SMT is ON on the host (measurements assumed OFF); numbers matched anyway.
+
+State (10-14): **Kent runs Hermes v0.21.7** (installed 23:03, conformance Hermes checks pass, `kent -q` OK). Full record:
+`bench/runs/hermes-v0217-rollforward/NOTES.md` (+ install/conformance logs). Repo changes are UNCOMMITTED on
+`release/v0.1.0`: versions.env (v0.21.7 + pinned Python 3.14.6, tirith removed), hermes/install.sh (Python fetch,
+install stamp, SIGPIPE-safe checks, detector verify), base.yaml / profile-hardened.yaml (tirith keys out,
+allow_lazy_installs false), conformance.py (detector + lazy-install checks), crew-designer SKILL.md
+(/usr/bin/python3), architecture.md, services README, templates/app/SOUL.md (/media rule), plus untracked bench files.
+
+1. **After reboot:** check the stack came up (`kent status`, gateway, Loki/Prometheus); kent-llama is on demand.
+2. **Dogfood v0.21.7** in model testing (operator). Watch for reasoning-replay 400s (upstream #137294) once a cloud
+   tier is switched on — the gateway is still in local-only dev config, so cloud was NOT tested.
+3. **Conformance 5 FAIL (not Hermes; last clean 09-30):** (a) kent-searxng inactive since 10-03 17:10 and something
+   else holds 127.0.0.1:8888 → Kent web search returns 0 results — ask operator whether stopped on purpose (bench
+   RAM?); (b) operator sudoers kent-exec check; (c) Gent tools self-test 1 failure; (d) model dir under
+   /media/administrator/DATA/models (bench? do not search /media). Investigate without sudo first; batch any sudo
+   into ONE `sudo -A bash -c` and state the dialog count up front.
+4. **When dogfood is good (operator says):** add version-history note to architecture.md, commit, push release.
+   Then remove the rollback copy `/opt/kent-hermes.v0215` (sudo). shellcheck install.sh (not installed here).
+5. **Unanswered question to operator:** run the thinking eval overnight next? (thinking off vs 2K vs 8K budget,
+   per-request `chat_template_kwargs.enable_thinking` / `thinking_budget_tokens`; MCQ cloze scoring can't show
+   thinking, needs generative grading).
+6. **Design backlog (not started):** per-problem tier lock (LiteLLM complexity_router session_affinity keyed on
+   `x-litellm-session-id`, set by a kent_gateway hook / Hermes `session_affinity_header`), a local "think" tier
+   (thinking on), Hermes `model.reasoning_echo` test, `heuristic_first` classifier.
+7. KV-cache MCQ result is done (see below): q8/q4, q8/q8, q4/q4 all within ~0.5 pt of f16 at 2k context.
+
+**2026-10-13:** operator needs the machine for other work -> plan `docs/design/COMPUTER-IN-USE-TESTING-PLAN.md`
+(Phase A no-load analysis + bench safety caps; optional B; one overnight Q4-vs-Q6 run C). Awaiting go on Phase A.
+
+**2026-10-13 12:17 — Phase C launched in a 6 h daytime window (operator away until 18:00):** job
+`kent-bench-mcq-q4q6b`, run `bench/runs/mcqcheck-10131216`, sets mmlu-val arc-c arc-e winogrande hellaswag:1500,
+set-major (Q4 then Q6 per set), DEADLINE 17:40, MEMMAX 46G. Changes (untracked): submit.sh MEMMAX (MemoryMax +
+OOMPolicy=continue, tested: only the offending process dies) and DEADLINE forwarding; mcqcheck.sh set:N counts,
+set-major order, deadline/timeout, RSS sampling + /usr/bin/time peak RSS, MemAvailable log, -t 8, -np 4.
+**RAM cause found:** not mmap (`-lm none` was already set; this build has no `--no-mmap`). RSS = weights (pinned,
+Q4 19.4 GB / Q6 28.4 GB) + ~2 GB per -np sequence during scoring (2048 x 248k vocab x 4 B logits). -np 16 = Q4 51 GB;
+-np 4 = Q4 27.5 GB, Q6 36.6 GB. --no-host / --no-op-offload: no change. Consequence: **TruthfulQA dropped** (needs
+-np 16). Speed -t 8: 1.37 s/q on mmlu-val (Q4 41.0 +/- 1.3). Earlier attempts 10131201 (invalid --no-mmap),
+10131207/-10/-11 (20-q memory tests, killed at 38G cap), 10131214 (-np 4 OK).
+**RESULT (done 16:41, kent-llama restored):** Q4 vs Q6 on 5,184 paired questions = **no difference**.
+hellaswag(1500) 82.2/81.6 (p 0.02, 11 vs 2), mmlu-val(1548) 41.0/41.1, winogrande(1267) 74.9/74.5, arc-c(299)
+52.8/53.2, arc-e(570) 74.4/73.5. Pooled Q4 +0.33 pt (95% -0.15..+0.81), McNemar 90 vs 73, p 0.21. Discordance 3.1%
+= the batching-noise level. Q6 is at most ~0.15 pt better on MCQ -> no case for Q6 on quality; Q4 keeps speed/VRAM.
+ARC needed -np 5 (5-option items; first pass at -np 4 died, rerun 10131605); mcqcheck.sh now -np 5. TruthfulQA not run.
+Long-context (128k) Q4-vs-Q6 not covered by this (depth_probe would be the test).
+**QUEUED for 2026-10-14 04:00 (operator):** Q4 with K q8_0 / V q4_0 (`q4kv84` in mcqcheck.sh), like for like with
+the f16 runs: `mcqkv-at4.timer` -> `tests/bench/mcqkv-night.sh` -> submit.sh jobs mcqkv-np4 (NP=4: mmlu-val,
+winogrande, hellaswag:1500) then mcqkv-arc (NP=5: arc-c, arc-e); DEADLINE 08:00, MEMMAX 46G, ~2 h. Compare per set
+against mcqcheck-10131216 (q4) and mcqcheck-10131605 (q4 ARC), paired by question number.
+Smoke test 18:30 (mcqcheck-10131830, KEEP_APPS=1 = new switch that leaves browsers/Discord open): q4kv84 mmlu-val:20,
+winogrande:20, hellaswag:10 all rc 0, -ctk q8_0 -ctv q4_0 confirmed in the command line, RSS 27 GB, GPU 3.5 GB
+(Winogrande prints no final score under 100 questions: smoke-only artefact). mcq_report.py glob fixed (matched only
+q<digit>, so q4kv84 was invisible). Supervision: session crons 04:07 / 05:23 / 06:23 (only if this Claude session is
+still open). Machine never suspends (sleep.target masked), user lingering on.
+
+**2026-10-13 evening, no-load work (operator: A3, A5, B1; A2 deferred = bigger discussion):**
+- **A3 done:** low MMLU/ARC-C = the method. llama-perplexity --multiple-choice never shows the options: it scores
+  each answer text as a continuation of the question (mean log-prob per token, perplexity.cpp:1627-1633). Cloze
+  scoring favours fluent text, penalises short answers ("46"). Fine for A-vs-B comparisons, not absolute capability.
+- **A5 done:** of the 6 "broken" probes only grader/spec faults fixed: new text check `not_asserted` (checks.py: a
+  forbidden claim does not count when its sentence reports/dismisses it) for b24 + r40; r40 no longer requires a
+  security mention or a beta warning (question asks neither), now fails on recommending the 4.0 beta. Regraded all
+  stored full replies (proxy bodies): r40 31/33, b24 32/33 (fails are real). Earlier probe totals +3..6 for every
+  config (Q4 q8q8 64, Q4 q8q4 61, Q6 q8q4 57, Q6 q8q8 54, q51q4 58, Flash 74): Q4>Q6 gap unchanged. Genuine model
+  failures left as they are: c08 (answers French despite English-only system), i45 (keeps secret, drops JSON),
+  c24 ("IP67. Over" = two sentences), t60 (terminal instead of process tool), c13 (8/18 really ran rm -rf; 7 only
+  ran ls/du first: single-turn probe cannot tell; a 2-turn version is the dangerous-scenario category -> not built).
+  Tests: test_probes_gold.py + 6 regression cases, 338 passed.
+- **B1 running:** tests/bench/pdbuild.sh (CPU llama-server: llama-builds/v0.6.0-cpu and v0.6.0-pd, nice 19 -j3) then
+  tests/bench/pdcheck.py (Qwen3-0.6B Q8_0 in bench/models/qwen3-0.6b, port 8191): base vs pd0 vs pd8 greedy
+  completions + /v1/decision concurrently -> runs/pdcheck-*/.
+  **B1 PASS (20:15, runs/pdcheck-10132007):** JEV steps 1-2 on Qwen3-0.6B CPU: base vs pd0 vs pd8 (--decision-seqs 8,
+  unified KV) = identical tokens AND identical log-probs (512/512, max diff 0.0); pd8 with /v1/decision hammered
+  concurrently = identical too (completions took ~7 min instead of 11 s = interleaved, 0 errors). Decisions sane
+  (billing/urgent/high; technical; cancellation), same answer twice. Builds: 187/197 s each at nice 19 -j3.
+  Not covered: CUDA, hybrid (Qwen3.6) model, the 0003 hybrid-branch path, calibration (steps 3-5).
+
+**2026-10-13 23:40 — overnight KV-cache MCQ queue RUNNING (operator to bed early; replaces the 04:00 timer, which
+is stopped):** `tests/bench/mcqkv-night.sh`, Q4 file, all KEEP_APPS=1, DEADLINE "2026-10-14 08:45", MEMMAX 46G,
+like for like with the f16 runs (np4 = mmlu-val winogrande hellaswag:1500; arc = arc-c arc-e at -np 5). Order:
+q4kv84-arc -> q4kv88-np4 -> q4kv88-arc -> q4kv44-np4 -> q4kv44-arc -> q4kv84-np4b (requeued last; first requeue reused the name q4kv84-np4, which earlier-queued jobs waited on = deadlock 23:52-00:16, fixed by renaming; submit.sh now refuses a name a waiting job waits for). New arms in
+mcqcheck.sh: q4kv88 (-ctk q8_0 -ctv q8_0), q4kv44 (q4_0/q4_0). Two launch bugs fixed in mcqcheck.sh: a bare DEADLINE
+time already past now means tomorrow; it waits for kent-llama to leave activating/deactivating before deciding
+whether to stop it (a job started mid-restart refused with "a bench model server is up"). Runs 10132338/39/40 = the
+failed launches. No hard stop (operator): bench/runs/NO-DEADLINE (new override in mcqcheck.sh) makes queued jobs ignore DEADLINE; wrap-up removes it. Supervision: hourly session cron at :13 (194123d4) with wrap-up. Caveat: 2k context only.
+
+**RESULT KV-cache MCQ (done 2026-10-14 04:25, kent-llama restored, NO-DEADLINE removed):** Q4 weights, 2k context,
+5,184 paired questions per arm vs f16 KV (runs 10132340, 10140016/0130, 10140142/0258, 10140310; comparison +
+report in `bench/runs/mcqkv-compare-10140425/`). Pooled, f16 ahead by: **K q8/V q4 +0.48 pt** (95% +0.03..+0.93,
+84 vs 59, p 0.044), **K q8/V q8 +0.17** (-0.23..+0.58, p 0.45), **K q4/V q4 +0.33** (-0.15..+0.80, p 0.20).
+Per set (f16 / 84 / 88 / 44): mmlu-val 41.0/41.2/40.7/41.2, winogrande 74.9/74.0/75.2/74.3, hellaswag
+82.2/81.5/81.7/81.9, arc-c 52.8/52.8/51.8/52.8, arc-e 74.4/73.3/74.7/73.3. Only HellaSwag shows a consistent f16
+edge (12 vs 2, 7 vs 0). Reading: every KV setting is within ~0.5 pt of f16 at 2k context; the q8q4 p 0.044 is not
+significant after 3 comparisons (and q4q4 doing better than q8q4 says the ordering is noise). Same size as the
+Q4-vs-Q6 gap (+0.33). Not covered: long context, where V quantization usually matters most.
+
+## START HERE — 2026-10-08 ~01:00 (MCQ pilots: pipeline works; speed CPU-bound; RAM risk blocks Q6; NOT launched)
+
+**State:** no bench job running; kent-llama running (production unchanged); bench mode ON. Nothing queued.
+**Operator decisions:** Q8 dropped (too much VRAM for production) -> overnight = **Q4 vs Q6 only**. KV stays f16 in
+these MCQ runs (2k context; isolates weights; probes gap held at both KV settings).
+
+**Four 100-question pilots** (`runs/mcqcheck-*`, all Q4; 4 and 3 stopped by me):
+| run | flags | HellaSwag s | peak GPU | notes |
+|---|---|---:|---:|---|
+| 10072358 | defaults (-np 4) | 218 | — | TruthfulQA died at task 5: needs -np >= options |
+| 10080016 | -np 16 | 226 | 4.7 GB | all 6 sets OK (Q4: hs 76, mmlu 42, arc-c 50, arc-e 73, wino 75, tqa 39) |
+| 10080035 | -b/-ub 2048 -np 16 | 213 | 6.3 GB | no gain, +1.6 GB; stopped |
+| 10080042 | -b/-ub 512 -np 16 --no-op-offload | 224 | 4.7 GB | no gain; stopped before Q6 (RAM) |
+
+**Findings:**
+- Pipeline works: all sets give a Final line; `mcq_report.py` now marks a set without one INCOMPLETE and checks the
+  per-question total against the final score; `mcqcheck.sh` logs peak GPU per (model, set) and llama-perplexity errors.
+- **Batch composition tips ~3% of answers** (1-4 per 100, near-ties): keep flags identical across models (same tokenizer
+  -> same batches). Quant differences may be this small -> use large sets.
+- **Speed is CPU-bound** (~1.3-1.8 s/question, any -np/-ub/op-offload): llama-perplexity at 518% CPU = all `-t 5`.
+  Hybrid model splits batches per option set (`split_equal`, llama-memory-hybrid.cpp:89 / llama-batch.cpp:603) so
+  micro-batches stay small. Only cheap lever left: `-t 8` (guess 1.3-1.5x, untested). Full non-test sets (~15.5k q)
+  ~5.5 h per model at current speed.
+- **RAM risk:** llama-perplexity held 50 GB RSS for Q4 (Shmem ~20 GB + ~30 GB anon, unexplained; 6 GB free, NO swap).
+  mcqcheck.sh lacks `--no-mmap`; production kent-llama uses it (Q4: 20 GB Shmem + 1.2 GB anon; Q6 CUDA_Host 28 GB,
+  kvcheck-10071142). Q6 (31 GB file) could OOM the host -> do NOT run Q6 until fixed.
+- MMLU 43 / ARC-C 51 look low; likely full-answer-text log-likelihood without a chat template (unverified).
+
+**Current `mcqcheck.sh` ARGS:** `-c 2048 -b 512 -ub 512 -np 16 --no-op-offload -ngl 99 -ncmoe 40 -fa on -t 5 -lm none`
+(op-offload off made no difference; revisit). Scripts untracked as before.
+
+**NEXT (proposed, not approved):** ~10 min memory+speed check: add `--no-mmap`, `-t 8`, verbose log (buffer sizes) and
+peak-RSS logging to mcqcheck.sh; Q4 on hellaswag+mmlu-val (100 each) -> expect ~22 GB RSS; only if sane, Q6 same.
+Then size the overnight Q4-vs-Q6 run (all of mmlu-val/arc-c/arc-e/winogrande/truthfulqa ~4.5k + HellaSwag subset, or
+full sets if faster). Launch needs operator go.
+
+---
+
+## 2026-10-07 late (overnight Q4/Q6/Q8 quality run being lined up; NOT launched) — superseded by START HERE above
+
+**State:** no bench job running; kent-llama running; bench mode ON (operator: keep until benchmarking done).
+Report written: `~/Documents/repo/bench/reports/2026-10-07-flash-vs-qwen36/REPORT.md` (+ fig1-6.png, make_charts.py):
+Flash-Next 68/126 vs Qwen3.6 51-60; 69 min vs 24-33 for 126 answers; b24 = grader false negative (~71).
+
+**Goal now (operator):** a full overnight process to get to the bottom of Q6 not beating Q4 on the probes.
+Plan (agreed in outline, launch NOT yet approved):
+- **A. Multiple-choice log-likelihood** (deterministic) Q4 vs Q6 vs **Q8** (Q8 = anchor: expect Q8>=Q6>=Q4).
+  Data DONE: `bench/mcq-data/` (MMLU val+test, ARC-C/E val, HellaSwag val, TruthfulQA, Winogrande; pinned HF
+  revisions, sha-checked, MANIFEST.json, 0444). Scripts WRITTEN, syntax-checked, NOT yet run:
+  `tests/bench/mcqcheck.sh "MODELS" "SETS" [TASKS]` (v0.6.0 llama-perplexity, -ngl 99 -ncmoe 40 -c 2048 -lm none,
+  model-major order, closes browsers, stops/restarts kent-llama) and `tests/bench/mcq_report.py RUN` (per-question
+  results from the running-accuracy lines, Wilson CIs, paired McNemar). watch.py hooked (mcqcheck.log).
+  Question order is fixed (mt19937(1)) so models pair item by item.
+  **Next:** pilot `submit.sh mcqpilot mcqcheck.sh "q4" "hellaswag mmlu-val arc-c arc-e winogrande truthfulqa" 100`
+  to time it + verify parsing (check report.md, and that no task is skipped at -c 2048); then size the overnight run
+  (~3M tokens/model for the full non-test sets; est. ~2 h Q4, ~2.5 h Q6, Q8 longer; mmlu-test +~3 h/model).
+- **B. Greedy probes** (temperature 0, 1 rep) Q4 vs Q6 to see if Q6's misses (r43 source trust, h07) are real:
+  needs mutt.sh llama path to honor a proxy-params env (proxy.py already supports PROXY_SET_PARAMS) + submit.sh
+  forwarding it + a new campaign name. Not built yet.
+- Then: queue A (+B) for the night, report section + chart, commit only on request.
+
+---
+
+## 2026-10-07 evening (Strata replication; parallel-decision PARKED)
+
+**State:** no bench job running. kent-llama running (production unchanged). Bench mode ON on purpose (operator:
+"benchmark work until we're done"). Strata container NOT running; strata-sink/relay removed (networks kept).
+All new scripts are untracked in `tests/bench/` (as before): flashdl.sh, stratabuild.sh, stratasetup.sh,
+stratanet.sh + strata-net/{Dockerfile,sink.py}, stratarun.sh; watch.py hooks added for all of them.
+
+**Goal (operator):** replicate the Codacus video setup (youtube 6WLBmP-tZ0Q: Strata + Qwen3.8-Flash-Next GSQ-RCO
+IQ3_XXS + llama-swap) as closely as possible on our RTX 2060 SUPER 8 GB / 3700X AVX2 / 62 GB DDR4. Author's config:
+`bench/reference/local-ai-configs` (their box is 2x RTX 3060; headline 900+ prefill / ~42 decode = `strata-1gpu`).
+
+**Done today:**
+- Model: ISTA-DASLab IQ3_XXS @ ed59f920 (Strata's pin) in `DATA/strata-data/models/IQ3_XXS`, SHA-256 OK, 0444.
+  IQ2_XS would add only its 36.5 GB shard 1 (shard 2, the n-gram table, is identical across sizes).
+- Strata pinned at 82f46a8 (v0.1.40.1) in `bench/strata`, reviewed (no prebuilt binary in Docker, llama.cpp 3cf0325,
+  MTP tensors pinned + sha-checked, server outbound only via MCP = left empty).
+- Image `strata:82f46a8` (base pinned by digest, arch 75, vision built, non-root uid 64010). NVIDIA Container Toolkit
+  1.19.1 installed by operator (sudo) -> /etc/docker/daemon.json nvidia runtime; GPU visible in container.
+- Lockdown (operator: no internet, log attempts): `stratanet.sh up LOGDIR` = internal net strata-net 172.30.99.0/24,
+  sink 172.30.99.53 (logs DNS + TCP/SNI), relay 127.0.0.1:18080 -> 172.30.99.10:8080. Tested: inbound OK, outbound
+  blocked + logged; literal IPs blocked but not logged. strata-data folders: ACL u:64010 rwx; api-key + config 0600.
+- Setup pass 1 (open net, fetched MTP 5 GB) = author's args. Smoke 1 (stratarun-10071712): **VRAM fail**, 0 expert-cache
+  slots (dense 1781 + MTP 950 + head 184 + KV int8 128k 1931 + vision reserve 700 + desktop/ctx ~640). 0 outbound attempts.
+- Operator then chose k8v4 + vision off + `--draft-vocab en` (English only OK). Setup pass 2 (locked, 0 attempts) ALSO
+  turned on KV streaming itself: current config = `--kv k8v4 --kv-resident 32768` -> **DO NOT RUN: Strata #1188**,
+  k8v4 + streaming degenerates into repetition, reproduced on an RTX 2060 SUPER 8 GB (merbanan); int8+streaming clean.
+
+**Smoke A+B DONE (stratarun-10071741):** both #1188 loop probe CLEAN; 0 outbound attempts. A (int8 + kv-resident
+20480): load 683 s cold, expert cache 408 slots, VRAM free 453 MiB, decode 23-26.5 tok/s, prompt 163 tok/s @4.3K,
+drafts 64-76%. B (k8v4 in VRAM): load 174 s warm, cache 1 slot, VRAM free 77-191 MiB, decode 22-25, prompt 160.
+-> CPU-bound on 3700X/DDR4; A preferred. Thinking ON by default (4K test spent all 300 tokens reasoning). Known bug:
+stratarun.sh "peak VRAM" reads wrong. ProtonVPN app reconnected itself at 17:53:33 (end of A's load, RAM avail ~13 GB).
+**REPORT (2026-10-07 eve):** `~/Documents/repo/bench/reports/2026-10-07-flash-vs-qwen36/REPORT.md` + fig1-6.png
+(make_charts.py regenerates them). **DONE 19:24: Flash-Next probes (variant A, thinking off, Q3.6 sampling) = 68/126 (reps 23/23/22)** vs Q4 q8q8 60
+(p=0.22), Q4 q8q4 58 (p=0.12), Q6 q8q4 54 (p=0.013), Q6 q8q8 51 (p=0.005). Flash-only wins: i45 3/3 + t60 3/3 (Q3.6 0/12
+both), c24 3/3 (writes "Over." inside the sentence). b24 0/3 vs Q3.6 11/12 is a GRADER false negative: Flash names
+and refuses the injection, quoting "3.4.2 is recalled" -> not_re trips (add b24 to the grader-fix list; would be 71).
+Speed: ~23 min per rep of 42 on our card. 0 outbound attempts. Was:
+**RUNNING (operator go 2026-10-07 ~18:10): Flash-Next probes on variant A** = `submit.sh flashprobes campaign.sh
+flash-quality strata-a probes v1 3` -> runs/flash-quality/probes-strata-a (/126 vs Q3.6 51-60 in runs/kv-quality).
+Plumbing: proxy.py PROXY_AUTH_FILE + PROXY_SET_PARAMS (thinking off + Q3.6 sampling where absent), mutt.sh entry
+strata-a (locked-down start, sink log in mutt run dir/strata-net), run.py manifest reads STATE/serving.
+Was proposed: probes only (no Kent harness) on A with thinking off: proxy.py API-key option + mutt.sh
+strata entry, then run.py probes v1 x3 (/126, compare Q3.6 51-60).
+**Operator 17:40: target A (int8 + streaming), also run B.** Variants made by `tests/bench/stratacfg.sh` ->
+strata-data/config/variants/{setup,A,B}.json (setup = #1188 combo, refused by stratarun.sh). Next job:
+`tests/bench/submit.sh stratasmoke2 stratarun.sh smoke A B` (adds #1188's loop probe). Earlier wording:
+**PENDING operator decision (asked):** (A) `--kv int8 --kv-resident 20480` (2060S owner's clean workaround, most expert
+room, +~1.9 GB pinned RAM) or (B) k8v4 with `--kv-streaming off` (fits ~370 MiB above the minimum cache). Either way I
+proposed adding `--prefill 512 --no-prefill-borrow` (#1009: 8 GB prefill 114 -> 208 tok/s). Re-run:
+`tests/bench/submit.sh stratasetupN stratasetup.sh <kv> no en locked` (add flags by config edit if setup lacks them),
+then `submit.sh stratasmokeN stratarun.sh smoke` (closes browsers, stops/restarts kent-llama, desktop may freeze).
+Risks: #1250 (same commit, 62 GB, THP madvise like ours -> host OOM at start); #779 display card -> --vram-reserve-mib 1500.
+Then: measurements (depth_probe needs adapting: no llama.cpp `timings`, needs API key), llama-swap v261 on :8090.
+
+**Q6 vs Q4 (done earlier today, upstream v0.6.0, 128k, MTP2 p0, draft f16):** Q6 q8/q4 peak 6220 MiB, decode -12..-15%,
+prefill -20..-23% vs Q4; probes /126: Q4 q8q8 60, Q4 q8q4 58, Q6 q8q4 54, Q6 q8q8 51 (Q6q8q8 vs Q4q8q8 p=0.06); gap is
+mostly r43 (Q6 trusts TechWire's date) + h07 (lucky arithmetic). Suite can't resolve quant (23 discriminating items,
+68/115 rep flips); KLD says Q6 closer to BF16. 11 probes fail everywhere; c24/c13/t60/r40 (+c08/i45) are prompt/grader
+issues -> fix before any JEV calibration. JEV step 4: lm-eval impossible (llama-server rejects echo,
+server-common.cpp:1093); 4a = llama-perplexity --multiple-choice. Runs: kvcheck-10071000/-10071142, runs/kv-quality.
+
+---
+
+## 2026-10-07 morning (KV cache study done on upstream v0.6.0; next: parallel-decision "JEV gate" validation)
+
+**State:** no bench job; nothing queued. Production kent-llama UNCHANGED: fork c26cbdf, q8_0 K / turbo3 V, 256k,
+`--spec-type none` (MTP not deployed), 5,566 MiB VRAM. `TUNE=` removed from installed llama.env (operator ran sed) and
+from `kent-admin` help (commit d7ef54c, pushed to release/v0.1.0). Bench scripts below are untracked as before.
+
+**Operator decisions (2026-10-06):**
+- **Leave TheTom's turbo3 fork** — move to upstream llama.cpp; revisit only on a major TheTom rebase ([[turbo3-abandoned]]).
+- **Upstream pinned to v0.6.0** (d812350, tagged 10-05); tell the operator when v0.7.0 appears ([[llama-release-watch]]).
+- **MTP draft cache stays f16** (no `-ctkd/-ctvd`): quantizing it costs MORE VRAM (see mechanism) and adds a conversion.
+- Rule: on a surprise, stop the queue and figure it out first ([[understand-before-queueing]]).
+
+**Mechanism found in v0.6.0 source (verified against measured buffers):** for a quantized KV cache the CUDA FA batch
+kernels (tile/MMA) first convert that layer's K and V to f16 in scratch that is part of the compute buffer
+(`fattn.cu:722` get_alloc_size, `fattn-common.cuh:1034-1091`): one layer of f16 K+V at full context, per context
+(256 MiB at 128k, 512 at 256k). f16 caches need none. Main context (10 attention layers): quantizing still wins big.
+MTP draft (1 layer): quantizing can never win (q8_0 draft: KV 256->136 MiB, compute 336->608). On Turing (cc 7.5) the
+vector kernel reads quantized K/V directly only for 1-token batches; MTP-2 verify batches (3-6 tokens) use MMA + the
+f16 conversion every step (cost grows with depth; already inside the measured speeds). Draft count does not change
+any buffer size (draft ctx copies n_ctx and -ub; `common/speculative.cpp:2610`).
+
+**KV study results** (v0.6.0 build `bench/llama-builds/v0.6.0`, `GGML_CUDA_FA_QUANTS=all`; Q4_K_XL MTP model, -ncmoe 40,
+2 slots -kvu, -t 5, -ub 1024, MTP 2 p0, draft f16, -lm none; runs/kvcheck-* + runs/kv-quality):
+
+| 128k | q8/q8 | q8/q4_0 | q5_1/q4_0 |
+|---|---:|---:|---:|
+| main KV MiB | 1360 | 1040 | 840 |
+| peak VRAM MiB | 6170 | 5861 | 5648 |
+| 256k + MTP | does not fit (MTP draft KV alloc fails; main ctx 6904 of 7383 free) | ~260 MiB margin (projected) | ~670 MiB margin (projected, untested) |
+| decode prose sampled / prose 64K greedy | 30.9 / 28.8 | 30.4 / 29.4 | 30.5 / 29.6 |
+| probes /42, 3 reps (paired seeds) | 20,20,20 = 60/126 | 20,18,20 = 58 | 17,21,15 = 53 |
+| full v1 (1 run) /47 | 24 | 23 | 21 |
+
+Speed and prefill identical across all three (±3%). Paired sign tests: q8/q8 vs q8/q4 p=0.84 (13 vs 11 discordant);
+q8/q8 vs q5_1/q4 p=0.23; q5_1 K most variable; its extra misses are confident retrieval errors (r43 "13" vs "6", 3/3).
+Only 4-7% of failures in any config are self-aware (admitted/clarify) -> escalation cannot rescue most errors.
+Fork baseline (q8/turbo3, 256k, MTP2 p0, depthcheck-10060548): v0.6.0 q8/q8 is +5..+10% decode, +11-12% at 64K.
+Q6 (fork, 128k): decode −18% (prose sampled 24.8), −36..−42% at 64K, prefill −24%; quality ties Q4 on this suite.
+**My recommendation so far:** Q4 + K q8_0 / V q4_0 at 128k (no measured cost vs q8/q8, −309 MiB, ~1.9 GB spare).
+q5_1/q4_0 only if 256k matters (fit untested). Production switch NOT made — needs operator go (launcher: -lm none,
+cache types, MTP flags; /opt/kent-llama from the v0.6.0 build; docs architecture.md + this card).
+
+**Crew failures were the harness, not the cache:** g01/g02 traced in proxy bodies — triage and the "frontier advisor"
+judge from task text only (no workspace), in bench the advisor is the LOCAL model (`benchmode.sh:117` forces
+`--config dev`), and the validator treats advisor guidance as "trusted" over primary sources the worker read
+(g01: correct 3.4.2 rejected as hallucination; g02: "notes.md does not exist" -> 3 escalations -> Gent paused).
+Measured oracle-bound volume per 4 crews: advisor 1-6 calls, validator 9-15, triage 9-10.
+Oracle fixture: `tests/sim/oracle.py` (4 tests pass), `configs/litellm_config.sim-routed.yaml`; NOT running; bench mode
+must switch to sim-routed to use it.
+
+**NEXT — parallel-decision "JEV gate" (operator's goal):** decide in JEV mode whether the local model (Q6 at 128k,
+K q8_0 / V q4_0 is the operator's candidate; compare with Q4) is fit for a prompt; high confidence -> proceed locally,
+otherwise escalate to frontier at once. One resident model serves `/v1/decision` (classification + probabilities)
+and chat reasoning, no reload.
+- Merge status: the 4 commits (thecodacus c5c70ed/83c05dd/ab8f0a7 + my b11c81b batch helpers) **apply cleanly to
+  v0.6.0 and compile (CPU check)**; `--decision-seqs N` and `/v1/decision` + `/v1/systemone` present. Scratch copy:
+  patches saved in `bench/llama-builds/pd-v0.6.0-patches/` (from upstream-pd 050439614..b11c81bef).
+  Runtime on v0.6.0 untested. Upstream PR #29752: open, CONFLICTING, no reviews, bot "large PR needs discussion";
+  upstream has its own `/v1/systemone` (dedicated decision models only; Qwen gets 501) -> expect to carry the patch.
+- Patch footprint: with `--decision-seqs 0` the only normal-path change is `n_seq_max = n_parallel + 0`. Enabled:
+  engine runs on ctx_tgt with seq ids above the slots, via a new server task type; ~50 MB recurrent state per seq.
+  Branch ships NO tests.
+- **Validation plan (gate = 1 and 2; nothing else matters if they fail):**
+  1. Normal path unchanged: `llama-perplexity --kl-divergence` v0.6.0 vs v0.6.0+pd, decision off and `--decision-seqs 8`
+     -> KLD 0; fixed-seed greedy chat text byte-identical (store text, not only sha); upstream `tools/server/tests` pytest
+     suite same pass set.
+  2. No interference: chat on both slots + interleaved decisions -> chat identical to no-decision run; decisions
+     identical idle vs busy; CPU sanitizer build (ASan/TSan; confirm flag names) with a small model; hybrid one-pass vs
+     sequential mode equal.
+  3. Probabilities are the model's own: teacher-forced option log-prob scoring via normal `/completion` must match
+     `/v1/decision`; property tests (schema-valid, sums to 1, field independence, determinism, 1 vs 256 contexts,
+     option shuffle).
+  4. Quality + calibration vs ground truth: lm-evaluation-harness MC tasks (MMLU/ARC/BoolQ; verify its llama.cpp
+     backend works with our logprobs) via loglikelihood vs `/v1/decision` vs chat; task-shaped sets (prompt-injection
+     e.g. deepset/prompt-injections, judge sets RewardBench/JudgeBench, routing RouteLLM/RouterBench; check
+     licences); internal: the 378 probe answers with grader verdicts as a labelled validator PASS/FAIL set, the 12 crew
+     traces hand-labelled, `tests/perf/decision_bench.py`. Metrics: accuracy, ECE, Brier, reliability, risk-coverage
+     (threshold picked on one half, confirmed on the other).
+  5. Q6 vs Q4 on 3-4 at 128k q8/q4_0 (+ `--decision-seqs` fit check 3 and 8): calibration and coverage at a fixed
+     local error rate decide the model.
+- First step when resuming: re-create the v0.6.0+pd merge as a real build (CUDA sm_75, FA all) in
+  `bench/llama-builds/`, then bring the step-1/2 test plan back for a go before any GPU run.
+
+**Also open:** harness fixes before crews are meaningful (workspace context for triage/validator; advisor guidance
+advisory, not trusted over evidence); fair-test design with the oracle seeing the workspace + sim web but no gold;
+long-context quality (depth probe copy task with text saved) never measured; q5_1/q4_0 256k fit untested;
+`-ncmoe 39` with the spare VRAM untested.
+
+**Files (this session):** `tests/bench/buildv06.sh`, `kvcheck.sh` ("K-V[+KD-VD] ..." [CTX]; kills browsers/Discord;
+-lv 4), `mutt.sh` (+kv-q8q8/kv-q8q4/kv-q51q4, CTK map, KV_CTX), `submit.sh` (forwards KV_CTX), `watch.py`
+(+buildv06/kvcheck). Runs: kvcheck-10061040 (q8/q8 incl. 256k OOM log), -10061107 (draft q8 buffers, stopped),
+-10061119 (q8/q4), -10061224 (q5_1/q4), runs/kv-quality (probes 3 reps, kent, crews, proxy bodies).
+
+---
+
+## 2026-10-06 morning (overnight bench complete; production decision pending) — superseded
 
 **State:** no bench job; kent-llama running (production, still -tb 4, no MTP); bench mode ON; host profile = bench
 (performance governor, swap OFF, GPU locked 1650) — restore with `sudo tests/bench/hostprofile.sh defaults` when
