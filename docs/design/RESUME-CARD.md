@@ -20,7 +20,8 @@ Items 1 and 3 below are DONE; causes, all mine:
 - New: `kent -q` with no model server just hangs (LiteLLM retries) — should fail fast. The "43 s regression" was
   NOT one: cold runs (cache wiped by restarts/state swap) vs a warm 13.6 s; warm now 8.8 s. Normal = docs/design/BASELINE.md.
 **COMMITTED 2026-10-16 (local, NOT pushed):** 9468a30 Hermes v0.21.7, 2b0a0dc llama v0.6.0 switch, b391f4c sockets +
-sudoers check, 38e8867 docs. Push after: operator signs off Hermes dogfood + a reboot proves the socket fix.
+sudoers check, 38e8867 docs. Push after: operator signs off Hermes dogfood. Socket fix: check passively whenever the next reboot happens
+(do not prompt for a reboot).
 Tests at commit: unit 494 (venv from litellm requirements.lock + pytest 9.1.1 + pytest-asyncio 1.3.0), bench 359, live 48.
 **PRODUCTION MODEL DECIDED (operator, 2026-10-16):** Q4_K_XL MTP model, K q8_0 / V q4_0, **128k** (256k dropped),
 MTP 2 drafts p_min 0, draft cache f16, no -tb (-t 5), 2 slots -kvu, -rea off. **SWITCHED 2026-10-16 03:25** on
