@@ -52,7 +52,7 @@ while [[ $# -gt 0 ]]; do
 done
 export DRY_RUN; require_root
 
-KEYS="MODEL_SET CTX UB NCMOE THINK ALIAS PIN CORES FORCE_256K"
+KEYS="MODEL_SET CTX UB NCMOE THINK ALIAS PIN CORES"
 set_value() {  # set_value KEY=VALUE — validated against the launcher before it is written
     local key="${1%%=*}" val="${1#*=}"
     [[ "$1" == *=* && " $KEYS " == *" $key "* ]] || die "--set takes KEY=VALUE with KEY one of: $KEYS"

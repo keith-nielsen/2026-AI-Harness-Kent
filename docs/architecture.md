@@ -1,12 +1,26 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.9
-date: 2026-10-05
+version: 3.2.10
+date: 2026-10-16
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.10
+    date: 2026-10-16
+    summary: >
+      The local model server moves from the TheTom llama.cpp fork (c26cbdf; K q8_0 /
+      V turbo3, 256k, no speculative decoding) to upstream llama.cpp v0.6.0 (d812350,
+      built with GGML_CUDA_FA_QUANTS=all): Qwen3.6-35B-A3B MTP Q4_K_XL at 128k context,
+      K q8_0 / V q4_0, MTP with 2 drafts and no acceptance threshold (draft cache f16),
+      -ub 1024, every expert layer on the CPU, -lm none (v0.6.0 has no --no-mmap).
+      256k and turbo3 are retired (operator decision). Measured beforehand (kvcheck-10061119,
+      kv-quality: q8/q4 same quality as q8/q8; depth runs: MTP 2 p0 fastest at every depth)
+      and after the switch on Kent: one stream ~30 tok/s prose, both slots 40 tok/s
+      combined, peak VRAM 5.8 of 8 GB with both slots on 16K prompts, image input works
+      with MTP, conformance 149/0. The fork build is kept at /opt/kent-llama.forkc26cbdf
+      for rollback.
   - version: 3.2.9
     date: 2026-10-05
     summary: >
@@ -342,7 +356,8 @@ The local model is llama.cpp's `llama-server`, run on demand as `kent-llama.serv
 (a polkit rule allows exactly that unit and those verbs to `kent-operators`; the `kent`
 account cannot). It runs as `kent-llama` from a root-owned copy of the build in
 `/opt/kent-llama`, with settings in `/etc/kent/llama/llama.env` (the measured optimum:
-Qwen3.6-35B-A3B MTP, 256k context, `-ncmoe 40`, non-thinking; change with
+Qwen3.6-35B-A3B MTP Q4, 128k context, K q8_0 / V q4_0 cache, MTP 2 drafts, `-ncmoe 40`,
+non-thinking, upstream llama.cpp v0.6.0; change with
 `kent-admin llama set`). It serves two requests at once (`--parallel 2` with a unified KV
 cache, so each can use the whole context); the slot count is fixed in the launcher. Ownership of the model files follows the profile: in **lab** they
 stay the operator's (Kent only removes their write bits, so they must be world-readable, and
