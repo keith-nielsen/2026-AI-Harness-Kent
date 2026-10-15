@@ -230,8 +230,10 @@ def check_kent_account() -> None:
     sudoers = Path("/etc/sudoers.d/92-kent-operators")
     txt = sudoers.read_text() if sudoers.exists() else ""
     rules = [l for l in txt.splitlines() if l.strip() and not l.startswith("#")]
-    ok(rules == ["%kent-operators ALL=(kent) NOPASSWD: /opt/kent-core/libexec/kent-exec"], "§14 accounts",
-       "operators may run only kent-exec as kent", rules[0] if rules else "missing")
+    # closefrom_override: kent --grant hands Kent granted folders as open descriptors (sudo -C).
+    ok(rules == ["%kent-operators ALL=(kent) NOPASSWD: /opt/kent-core/libexec/kent-exec",
+                 "Defaults!/opt/kent-core/libexec/kent-exec closefrom_override"], "§14 accounts",
+       "operators may run only kent-exec as kent", " | ".join(rules) if rules else "missing")
     members = sh("getent", "group", "kent-operators").split(":")[-1]
     ok(OPERATOR in members.split(","), "§14 accounts", f"{OPERATOR} is a kent operator", members)
     st = subprocess.run(["runuser", "-u", OPERATOR, "--", "/usr/local/bin/kent", "status"], capture_output=True, text=True)
