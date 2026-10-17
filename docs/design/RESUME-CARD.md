@@ -1,5 +1,37 @@
 # Resume card — Kent harness
 
+## FIVE TIERS (2026-10-17 ~22:10; architecture 3.3.0; BUILT + TESTED IN REPO, NOT INSTALLED, NOT COMMITTED)
+
+Operator: fast (local, off) / default (local, thinking 2048) / smart (local, 4096) / cheap (DeepSeek V4.1 Flash,
+placeholder) / frontier (Opus 5.5). cheap + frontier Kent-only "until we change that"; Gents local-only; Claude
+answers cheap + frontier as the oracle until real keys. High-water decision (a) recorded (task 3 block below).
+Done in repo: 4 configs (default 2048, smart 8192->4096, both timeout 900 s; cheap prod deepseek/deepseek-v4.1-flash
+[id UNVERIFIED], dev local, sim/sim-routed oracle-cheap; fallbacks default/cheap -> fast); interim auto: labels
+fast+smart -> default, frontier -> frontier; classifier failure -> default (was frontier: scratch test showed a 15 s
+classifier timeout under load sending "17*23" to the oracle). kent_gateway: gent += default; call log + routed_model
+(label vs serving tier); digest + 3 Grafana dashboards group by it (LogQL checked on live Loki). Installer:
+--set-deepseek-key, empty deepseek_api_key credential, LoadCredential, start wrapper exports DEEPSEEK_API_KEY,
+self-test gent->cheap 403; GENTCHECK (POLICY-driven) passes 4 configs, refuses gent+cheap and default->frontier.
+kent-admin set-deepseek-key + status line. Conformance: default/smart budgets, default<smart, cloud tiers defined,
+Gents never cheap/frontier, keys INFO (exercised on prod/sim-routed + bad policy). Docs: architecture 3.3.0, README
+(badge, diagram, table, Hermes v0.21.7 fix), SOUL tier text, conformance.md, dev-notes, glossary, manual-validation,
+services README, TODO. Tests: unit 552, live 50 (kent-llama started 21:40 for them), bench 373; scratch gateway
+(sim-routed + oracle answered by Claude): fast 1.6 s no thinking; default/smart think; cheap -> oracle-cheap;
+frontier -> oracle-frontier; gent default 200, gent cheap/frontier 403; auto easy -> default, hard -> frontier.
+INSTALLED 2026-10-17/18 (sudo, sim-routed): litellm, kent-core, hermes, grafana, gent, bench tools; conformance 163 PASS / 0 FAIL / 16 INFO. Installed gateway: cheap + frontier -> oracle :4010 (operator key, Claude answered), auto logs fast->default. Fixed on the way (architecture 3.3.1): Grafana plugins pinned to the package's bundled copies (preinstall/web installs/key fetch off; /var/lib/grafana/plugins emptied; /var/lib/grafana/plugins-bundled refilled root-owned - it had been empty since 09-30); vendor squid.service (open proxy *:3128, started by the squid package) switched off + conformance check. Repo-only, not yet installed: reset-failed squid.service in gent install.sh (vendor unit shows 'failed' after its stop timed out; harmless). Still untested: Kent itself through the installed gateway; DeepSeek model id. Everything uncommitted.
+DEEP CHECKS 22:15-22:35 (no sudo; scratchpad e2e_deep.py, 28/28 PASS): A prod config no keys: cheap 2.3 s / frontier
+0.4 s AuthenticationError -> local fast, both logged, gent->cheap 403; B budgets via gateway: default completion 2055
+(<= 300+2048), smart 2715, both answered 3.49 (correct) after reasoning, fast 0 reasoning; C default/smart timeout (5 s
+test value) -> fast, logged Timeout; D Hermes probes a06/a16/b15 via default and auto: tool calls, local, auto logs
+fast->default; E gent CrewAI-shaped default/smart local, gent cheap/frontier/auto 403; F unanswered oracle (8 s) ->
+fast. Also: unit file systemd-analyze verify OK; start wrapper exports each cloud key only when non-empty (fake
+binary); installer --dry-run under unshare -r (fake root, no system change) renders sim-routed, creates
+deepseek_api_key, installs unit; --set-deepseek-key / --set-anthropic-key dry-runs OK. Stale-text sweep: fixed 3 in
+manual-validation. NOT testable before install: real LoadCredential + self-test, full conformance, Kent via
+installed gateway, DeepSeek model id; conf09 high-water = task 5 (not built).
+NEXT: one askpass install (litellm --config sim-routed, kent-core, hermes, grafana, gent, bench tools, conformance);
+then commit on request; push on request. Triage (task 5) replaces the interim auto later.
+
 ## CLASSIFIER REDESIGN PLAN (2026-10-17; operator-directed; NOTHING BUILT YET)
 
 Replaces the LiteLLM complexity router (classifier sees only its own short prompt, picks fast=off / smart=8192) with
@@ -72,10 +104,30 @@ higher-reasoning, slower model (300B class) for audits/deep work. Keep general c
 **TASKS to reach live testing (none started; order = dependencies; each lists needs and its test):**
 1. Label builder — script: bench runs -> one row per prompt (easy-safe, 4K-helps, pass/time per budget, cat, level,
    template). No GPU. Test: reproduces the BUDGET CURVE 115 numbers.
+   DONE 2026-10-17 (untracked): tests/bench/labels.py build|curve + test_labels.py (9 tests; both stored sim115.md
+   tables reproduced line for line). Output bench/runs/labels-1017/labels.json (+ curve.md), 6 runs, 12 arms:
+   easy_safe 83/115 (off 3 reps each; 12 of 42 v1 items are easy_safe, 2 of 73 others are not); helps_4k 14/115
+   (11 v1; 3 non-v1 = 2/3 at 2048 vs 1/1 at 4096, rep-count noise). Template = system frame gent/hermes/bare/custom.
 2. Threshold tool — easy threshold by Clopper-Pearson (alpha, delta), hard by utility; writes a versioned threshold
    file. No GPU. Test: unit tests incl. the 45/77/105/184 sample-size table.
 3. Triage prompt tuning — logprob triage variants on the 115, cross-validated by held-out category/template;
    report AUROC + false-easy at the chosen threshold. GPU (~minutes per variant; kent-llama stopped or idle).
+   DONE 2026-10-17 16:20 (untracked): tests/bench/triagecheck.py (GPU job, 8 question variants + 1 repeat, deployable
+   form, 1035/1035, 0 errors) + triage_report.py + test_triage_report.py (5). Report bench/runs/triagecheck-1017/
+   report.md. Repeat bit-identical; extra variant ~1 s. LOW-WATER: NOT SETTABLE — best easy AUROC 0.77 (effort4d,
+   diff15, mean_rank; all 8 wordings 0.62-0.77); held out, zero-miss thresholds gave 2/11 and 4/24 false easy
+   (~17% vs 5% target), caught 9-20 of 83, saved no time; certified rule routes nothing. HIGH-WATER: conf09 best
+   (helps_4k AUROC 0.71 [0.54, 0.86], 11 positives); held out on hard 42, top 50% -> 4096 = 75.4%/99 s vs random
+   70.1%/90 s, always-4096 74.6%/105 s. On all 115 (in-sample threshold, optimistic): top 30% -> 28 sent, 88.7%/57 s
+   vs always-2048 85.8%/50 s, always-4096 88.1%/65 s. Answer mass < 0.5 on 6-16/115 per variant (tool call/word).
+   OPERATOR DECISION 2026-10-17: high-water ON with conf09, ~30% share -> 4096, verify live (telemetry + shadow);
+   low-water stays unset (2048). Operator idea "4096 first prompt, then thunk down to off if it proves trivial":
+   own check (no GPU) — reasoning length of one 4096 call predicts easy_safe at AUROC 0.71 [0.58, 0.83], no better
+   than triage; <100 reasoning chars: 10 easy-safe vs 5 not (33% false easy). Literature: Ares (2603.07915) —
+   WebArena early steps (0-2) mostly LOW effort, high grows later (go_back/branch = recovery); TAU low 57% of steps;
+   LangChain sandwich: planning + final verification need most. => difficulty is NOT front-loaded in agent runs;
+   a one-way lock-down would miss later hard steps. No published data on step-to-step difficulty autocorrelation
+   found; measure it on our own sessions once telemetry (task 7) captures Kent traffic.
 4. GPU mechanics tests — (a) shadow divergence after the real answer reuses the checkpoint; (b) client disconnect
    cancels a running request; (c) behaviour with both slots busy (triage + real + shadow). GPU, scratch server.
 5. Gateway pre-call step in kent_gateway.py — triage call, thresholds, forward with off/2048/4096 + id_slot;
