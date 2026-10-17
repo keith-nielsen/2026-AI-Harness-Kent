@@ -1,6 +1,54 @@
 # Resume card — Kent harness
 
-## FIVE TIERS (2026-10-17 ~22:10; architecture 3.3.0; BUILT + TESTED IN REPO, NOT INSTALLED, NOT COMMITTED)
+## START HERE — 2026-10-18 (session exit point)
+
+**Released:** v0.1.0-rc.7 (architecture 3.3.1) — PR #2 merged to `main` (f3da7fa), annotated tag, GitHub
+pre-release. `release/v0.1.0`: origin at a4d7731 (docs, ahead of main; goes in with the next merge), plus one
+LOCAL commit with this START HERE section (not pushed; push when convenient).
+Working tree clean except `docs/design/WHY.md` + `docs/design/WHY operator edits.md`: UNTRACKED ON PURPOSE
+(operator: kept out of rc.7, will add later; never commit/push without asking).
+
+**Live on the reference machine (installed 2026-10-17/18, sim-routed gateway):** five tiers — fast (local, no
+thinking), default (local, thinking 2048), smart (local, 4096), cheap (DeepSeek V4.1 Flash placeholder; Kent-only),
+frontier (Opus 5.5; Kent-only). sim-routed sends cheap/frontier to the oracle on :4010 (`oracle-cheap`,
+`oracle-frontier`); with the oracle stopped they fall back to local fast. Interim `auto`: label fast/smart -> default,
+frontier -> frontier, classifier failure -> default. Gents: router/fast/default/smart only. No Anthropic or DeepSeek
+key installed. Conformance 163 PASS / 0 FAIL / 16 INFO (2026-10-18 03:49). Services at exit: kent-llama ACTIVE,
+kent-litellm, grafana-server, kent-squid active; bench mode OFF (bench gateway flavour sim-routed); oracle STOPPED.
+Vendor `squid.service` disabled but shows "failed" (stop timed out; harmless; repo gent install.sh now runs
+reset-failed — clears on next gent install or reboot).
+
+**Installer fixes found during the install (3.3.1):** Grafana had downloaded/updated ~17 plugins on every start,
+overriding the pinned .deb's bundled copies, and /var/lib/grafana/plugins-bundled (the vendor unit's bundled path)
+was empty -> now preinstall/web installs/key fetch off, downloads removed, bundled dir refilled root-owned,
+conformance checks all of it. The squid package had started vendor squid.service on *:3128 (loopback 200, LAN 403)
+-> switched off when Kent installed the package, conformance checks it. Audit of every other component's
+self-update / phone-home: all already off (Alloy, Loki, LiteLLM, Gitea, Hermes, CrewAI); no unattended-upgrades.
+
+**Kent tests through the installed gateway (2026-10-18):** (1) "17*23" -> kent/auto -> default, 391, 15 s.
+(2) "ask the cheap model through the router": Kent curled cheap without a key (401), grepped its files for a key,
+found `KENT_GATEWAY_KEY` in its terminal env and called cheap directly as kent -> oracle answered -> correct final
+reply, 50 s. => Kent can route itself to any tier from its shell. Operator: a COST item, not security; TODO.md
+"Cost: Kent can route itself" lists the options (strip key from terminal env / per-identity budget / accept).
+Lesson (memory frontier-oracle): Monitor the oracle queue whenever the oracle runs — first attempt lost a frontier
+answer because I did not watch it.
+
+**Next (operator's order unknown; ask):** (a) real Anthropic (+ DeepSeek) keys -> `--config prod`, verify the
+DeepSeek model id, re-run conformance, v0.1.0 final; (b) classifier task 5 = gateway triage pre-call step (conf09
+high-water ~30% -> smart, default otherwise, error -> default) — see CLASSIFIER REDESIGN PLAN below; (c) decide Kent
+direct-routing; (d) add the WHY doc.
+
+**Where things are:** test venv `~/.local/share/kent/venvs/gwtest` (LiteLLM from the lock + pytest; unit:
+`gwtest/bin/python -m pytest tests/gateway tests/kent_core tests/gent tests/install tests/sim` = 552; bench
+`tests/bench` = 373 (+6 skipped); live `LITELLM_BIN=gwtest/bin/litellm ... tests/live` = 50, needs kent-llama).
+Private evidence (not in repo; README inside): `~/.local/share/kent/evidence/` — 2026-10-16-classifier/ (nvclf
+scripts, baseline-regraded) and 2026-10-18-rc7/ (e2e_deep.py etc., install + conformance logs, rc7 notes, Kent test
+answers). All /tmp scratch was cleared 2026-10-18; paths below that say "scratchpad/nvclf" or "scratchpad/baseline-
+regraded" now live under evidence/2026-10-16-classifier/; scratchpad/tierexp (router profile script) was deleted.
+Oracle: `python3 tests/sim/oracle.py --port 4010 --wait 600` (queue ~/.local/share/kent/oracle); answer with
+`responses/<id>.md` (or .json for tool calls).
+
+## FIVE TIERS — history (2026-10-17; since installed, committed and released as rc.7)
 
 Operator: fast (local, off) / default (local, thinking 2048) / smart (local, 4096) / cheap (DeepSeek V4.1 Flash,
 placeholder) / frontier (Opus 5.5). cheap + frontier Kent-only "until we change that"; Gents local-only; Claude
@@ -18,9 +66,7 @@ Gents never cheap/frontier, keys INFO (exercised on prod/sim-routed + bad policy
 services README, TODO. Tests: unit 552, live 50 (kent-llama started 21:40 for them), bench 373; scratch gateway
 (sim-routed + oracle answered by Claude): fast 1.6 s no thinking; default/smart think; cheap -> oracle-cheap;
 frontier -> oracle-frontier; gent default 200, gent cheap/frontier 403; auto easy -> default, hard -> frontier.
-RELEASED v0.1.0-rc.7 2026-10-18: PR #2 merged to main (f3da7fa), tag + GitHub pre-release. WHY.md + 'WHY operator edits.md' deliberately left out (untracked; operator adds later). Kent direct-routing (KENT_GATEWAY_KEY in Kent's terminal) = cost TODO, decide later. Next: real keys -> prod config -> v0.1.0 final; classifier task 5 (conf09 high-water).
-INSTALLED 2026-10-17/18 (sudo, sim-routed): litellm, kent-core, hermes, grafana, gent, bench tools; conformance 163 PASS / 0 FAIL / 16 INFO. Installed gateway: cheap + frontier -> oracle :4010 (operator key, Claude answered), auto logs fast->default. Fixed on the way (architecture 3.3.1): Grafana plugins pinned to the package's bundled copies (preinstall/web installs/key fetch off; /var/lib/grafana/plugins emptied; /var/lib/grafana/plugins-bundled refilled root-owned - it had been empty since 09-30); vendor squid.service (open proxy *:3128, started by the squid package) switched off + conformance check. Repo-only, not yet installed: reset-failed squid.service in gent install.sh (vendor unit shows 'failed' after its stop timed out; harmless). Still untested: Kent itself through the installed gateway; DeepSeek model id. Everything uncommitted.
-DEEP CHECKS 22:15-22:35 (no sudo; scratchpad e2e_deep.py, 28/28 PASS): A prod config no keys: cheap 2.3 s / frontier
+DEEP CHECKS 22:15-22:35 (no sudo; evidence/2026-10-18-rc7/e2e_deep.py, 28/28 PASS): A prod config no keys: cheap 2.3 s / frontier
 0.4 s AuthenticationError -> local fast, both logged, gent->cheap 403; B budgets via gateway: default completion 2055
 (<= 300+2048), smart 2715, both answered 3.49 (correct) after reasoning, fast 0 reasoning; C default/smart timeout (5 s
 test value) -> fast, logged Timeout; D Hermes probes a06/a16/b15 via default and auto: tool calls, local, auto logs
