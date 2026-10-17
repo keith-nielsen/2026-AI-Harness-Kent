@@ -16,7 +16,7 @@ all are installed by `sudo ./install.sh` at the repository root, in the order be
 | `grafana` | vendor Grafana 13.1.0 via drop-in + provisioning ("Kent overview") | `grafana` | :3001 |
 | `gitea` | Gitea 1.27.3, SQLite; `kent/stack-template`, `kent/gent-<id>` repos | `gitea` | :3000 |
 | `searxng` | SearXNG metasearch (digest-pinned container, systemd-managed, read-only, no capabilities) | `kent-searxng` | 127.0.0.1:8888 |
-| `hermes` | the `kent` account + `kent-operators` group; Kent's own Hermes (commit-pinned, `uv sync --frozen`) and the tirith command scanner (pinned) in `/opt/kent-hermes`; managed policy (`configs/hermes/base.yaml` + `profile-<lab\|hardened>.yaml`), SOUL, bundled skills + `kent/crew-designer` | `kent` | — |
+| `hermes` | the `kent` account + `kent-operators` group; Kent's own Hermes (commit-pinned, `uv sync --frozen`) on its own pinned Python 3.14 in `/opt/kent-hermes`; managed policy (`configs/hermes/base.yaml` + `profile-<lab\|hardened>.yaml`), SOUL, bundled skills + `kent/crew-designer` | `kent` | — |
 | `kent-core` | Kent's tools (audit chain, digest, learnings review + escalation relay, QA, `kent-gent`), system timers as kent, the `kent` command and `kent-exec` entry point; enrols the installing operator | `kent` | — |
 | `llama` | llama.cpp `llama-server` (root-owned copy of the operator's build) as on-demand `kent-llama.service`; models by profile (lab: left operator-owned, write bits removed; hardened: `root:kent-models` 0440, restored on uninstall), read via read-only bind mount `/srv/kent/models`, selected model set SHA-256-recorded (operator-readable) and checked at each start, per-file audit on rehash; models filesystem recorded for start diagnostics (desktop automount: lab warns, hardened refuses); polkit start/stop for `kent-operators`; CPU tuning oneshot | `kent-llama`; group `kent-models` (members: hardened only) | 127.0.0.1:8080 |
 | `gent` | Gent runtime: internal Docker network, egress proxy, bridge sockets (gateway, proxy, search), image, spawn/destroy/ctl brokers | `kent-squid`; one `gent-<id>` per Gent | 127.0.0.1:3129; 172.30.0.1:3129/4000/8888 |
@@ -55,6 +55,8 @@ Grafana use SQLite.
   `fetch_verified` downloads through the installer's cache `/var/cache/kent-install` (root-only;
   a cached file is checked against the same pinned hash); vendor `.deb` packages (grafana, alloy)
   go through `ensure_pinned_deb`, which installs the verified file without adding an apt source.
+  Grafana uses only the plugins bundled in that package: `kent.conf` turns off its plugin
+  downloads, updates and web installs, and the installer empties `/var/lib/grafana/plugins`.
   pip and uv use the same cache for Python packages. `KENT_NO_CACHE=1` (`install.sh --no-cache`)
   bypasses it. The cache belongs to the installer, not a module: a plain uninstall keeps it,
   `uninstall.sh --purge` removes it, and `sudo rm -rf /var/cache/kent-install` reclaims the space
@@ -84,15 +86,16 @@ All model traffic goes through the gateway. `kent_gateway.py` maps each key to a
 
 | Identity | Models | Routes |
 |---|---|---|
-| `operator`, `kent` | all (router, fast, smart, frontier, auto) | all |
-| `gent` and each `gent-<id>` | router, fast (local only) | chat/completions, models; deny-by-default request shape |
+| `operator`, `kent` | all (router, fast, default, smart, cheap, frontier, auto) | all |
+| `gent` and each `gent-<id>` | router, fast, default, smart (local model only; checked per call) | chat/completions, models; deny-by-default request shape |
 | `metrics` | none | `/metrics/` |
 
 Per-Gent keys live in `/etc/kent/litellm/gent-keys/<id>.key` and are picked up without a
 restart. Configs: `configs/litellm_config.dev.yaml` (all local), `configs/litellm_config.yaml`
-(prod: smart/frontier → Claude Opus 5.5), `configs/litellm_config.sim.yaml` (simulation only:
-smart/frontier → the oracle fixture in `tests/sim/oracle.py`), `configs/litellm_config.sim-routed.yaml`
-(prod routing with the oracle in place of Anthropic).
+(prod: frontier → Claude Opus 5.5, cheap → DeepSeek V4.1 Flash), `configs/litellm_config.sim.yaml`
+(simulation only: cheap and frontier → the oracle fixture in `tests/sim/oracle.py`),
+`configs/litellm_config.sim-routed.yaml` (prod routing with the oracle in place of both cloud
+providers). In all of them default and smart are the local model thinking (budgets 2048 and 4096).
 
 **FALLBACK_TIMEOUT** (`/etc/kent/litellm/litellm.env`, set with `litellm/install.sh
 --set-fallback-timeout N`): how long a cloud call may take before falling back to local.

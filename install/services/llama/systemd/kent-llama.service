@@ -6,11 +6,15 @@
 # Runs as kent-llama (system account, no login, no sudo). Reads the models only through the
 # read-only bind mount /srv/kent/models, as a member of kent-models, and only after their SHA-256
 # matches the install-time record. Settings in /etc/kent/llama/llama.env.
+#
+# Starting or stopping this service changes no host performance setting (SMT, CPU boost, governor,
+# swap, GPU clocks): those are set only by hand, with tests/bench/hostprofile.sh (2026-10-05; the
+# kent-llama-tuning.service that switched SMT/boost on start and stop is retired).
 
 [Unit]
 Description=Kent local model server (llama.cpp)
-Requires=srv-kent-models.mount kent-llama-tuning.service
-After=srv-kent-models.mount kent-llama-tuning.service
+Requires=srv-kent-models.mount
+After=srv-kent-models.mount
 
 [Service]
 Type=simple

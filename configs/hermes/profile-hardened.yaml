@@ -5,8 +5,6 @@ platform_toolsets:
   cli: [clarify, todo, memory, session_search, skills, web, file, terminal]
 terminal:
   backend: local
-security:
-  tirith_fail_open: false              # no scanner, no command
 approvals:
   mode: manual
   deny:                                 # replaces the base list (lists are pinned whole)

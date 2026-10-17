@@ -16,10 +16,11 @@ SID = "1a2b3c4d"
 async def test_gent_key_maps_to_its_own_identity(gw):
     r = await auth(gw, GENT_KEYS[SID], body={"model": "fast", "messages": []})
     assert r.key_alias == f"gent-{SID}" and r.user_id == f"gent-{SID}"
-    assert r.models == ["fast", "router"]
+    assert r.models == ["default", "fast", "router", "smart"]
 
 
-@pytest.mark.parametrize("model", ["smart", "frontier", "auto", "anthropic/claude-opus-5-5", "FAST"])
+@pytest.mark.parametrize("model", ["frontier", "cheap", "auto", "anthropic/claude-opus-5-5",
+                                   "deepseek/deepseek-v4.1-flash", "FAST", "SMART"])
 async def test_gent_key_cannot_reach_other_tiers(gw, model):
     await denied(gw, GENT_KEYS[SID], 403, body={"model": model, "messages": []})
 

@@ -1,6 +1,8 @@
 [Unit]
 Description=Kent Gent bridge -> LLM gateway (172.30.0.1:4000)
-After=docker.service
+# No After=docker.service: sockets start before sockets.target and docker after it, so that
+# ordering is a cycle and systemd drops the socket at boot. FreeBind lets it listen on
+# 172.30.0.1 before the kent-gent0 bridge exists.
 
 [Socket]
 ListenStream=172.30.0.1:4000

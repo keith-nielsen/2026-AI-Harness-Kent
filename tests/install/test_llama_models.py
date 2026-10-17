@@ -144,9 +144,7 @@ def test_rehash_refuses_when_a_selected_file_is_missing(env):
 
 
 def set_model(env, value: str) -> subprocess.CompletedProcess:
-    # CTX=128k: the launcher rejects 256k for any set but mtp (measured there only).
-    shipped = (SVC / "llama" / "llama.env").read_text()
-    (env["conf"] / "llama.env").write_text(shipped.replace("CTX=256k", "CTX=128k"))
+    (env["conf"] / "llama.env").write_text((SVC / "llama" / "llama.env").read_text())
     env["manifest"].write_text(f"modelsdir {env['models']}\nmodelsmode lab\nfile {env['conf']}/models.sha256\n")
     return subprocess.run([str(SVC / "llama" / "install.sh"), "--dry-run", "--models-dir", str(env["models"]),
                            "--set", f"MODEL_SET={value}"], env=env["env"], capture_output=True, text=True)

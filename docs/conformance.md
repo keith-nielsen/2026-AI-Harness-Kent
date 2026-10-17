@@ -7,10 +7,10 @@ and move items between **Open** and **Closed**.
 
 | | |
 |---|---|
-| Last assessed | 2026-09-30, v0.1.0 candidate after the Phase 5 clean reinstall and reboot (architecture 3.2.4; reference machine: Linux Mint 22.3 (Ubuntu 24.04 base), RTX 2060 SUPER 8 GB, 64 GB RAM) |
+| Last assessed | 2026-10-18, v0.1.0-rc.7 candidate after the five-tier install, sim-routed gateway (architecture 3.3.1; reference machine: Linux Mint 22.3 (Ubuntu 24.04 base), RTX 2060 SUPER 8 GB, 64 GB RAM) |
 | Automated check | `sudo ./kent-admin conformance [--markdown FILE]` (root, read-only) |
-| Result | **149 PASS · 0 FAIL · 15 INFO** |
-| Test suites | 398 unit (gateway 145, kent_core 62, Gent CEO 25, install 162, sim 4) · 46 live (`tests/live`) · 24 in-container Gent checks (`tests/gent/run_tools_selftest.sh`) · router probe |
+| Result | **163 PASS · 0 FAIL · 16 INFO** |
+| Test suites | 552 unit (gateway 196, kent_core 147, Gent 40, install 164, sim 5) · 50 live (`tests/live`) · 24 in-container Gent checks (`tests/gent/run_tools_selftest.sh`) · router probe |
 | Manual validation | [`manual-validation.md`](manual-validation.md): operator runbook with prompts, commands, telemetry queries, expected outputs and a sign-off table |
 | Control matrix | [`controls.md`](controls.md): each enterprise control with evidence, status and framework mapping |
 | Rollback | Full purge-uninstall of all modules returns the host to the pre-install baseline (only non-Kent differences remain) |
@@ -26,9 +26,9 @@ design *with these amendments*; `architecture.md` itself will be revised to matc
 | Topic | Original design (v2.3) | Decision (operator), now in architecture v3.0.0 |
 |---|---|---|
 | Inference engine | Ollama on a Unix socket | Ollama dropped. Local model = llama.cpp `llama-server` as the on-demand `kent-llama` service on 127.0.0.1:8080 (own account; models root:kent-models 0440 behind a read-only mount, hash-checked at each start; operators start/stop it via polkit) — v0.1.0-rc.4 |
-| Cloud model | DeepSeek + Anthropic | Claude only: smart and frontier → Claude Opus 5.5 (`claude-opus-5-5`) in prod; no DeepSeek |
+| Cloud model | DeepSeek + Anthropic | Two cloud tiers, Kent only (3.3.0): frontier → Claude Opus 5.5 (`claude-opus-5-5`); cheap → DeepSeek V4.1 Flash (placeholder, nothing routes to it). default and smart → the local model thinking (budgets 2048 / 4096; smart was Opus before 3.2.11) |
 | Local-first | ~95% local | End-state for later; cloud intelligence does the heavy lifting for now |
-| Tier access | Gent CEO: fast + smart | Gents are **local-only** (router, fast). Anything harder is escalated to Kent |
+| Tier access | Gent CEO: fast + smart | Gents are **local-only**: router, fast, default and smart, all the local model, checked per call; never cheap or frontier. Expert judgement is escalated to Kent |
 | Kent's identity | Unix user `kent`, own service | Restored in architecture 3.1.0: Kent is the no-login `kent` account with its own commit-pinned Hermes (`/opt/kent-hermes`); humans use the `kent` command (group `kent-operators`); `~/ai-env` is untouched; an operator may run their personal Hermes on Kent's pinned install with their own home and gateway key. (From rc.1 to rc.2 Kent was a profile of the operator's Hermes, running as the operator.) |
 | Service accounts | Some shared groups (`ollama`, `agentic-logs`) | Every service has its own `user:group`; no shared `kent:kent` |
 | Gateway auth | LiteLLM virtual keys + DB | Single LiteLLM gateway, identity auth in `kent_gateway.py` (operator, kent, gent, gent-<id>, metrics); no PostgreSQL |
@@ -47,9 +47,9 @@ design *with these amendments*; `architecture.md` itself will be revised to matc
 |---|---|---|---|
 | 1 | Entity hierarchy & access rules | ✅ | Gateway identities enforce tiers; Gents can't reach frontier, kent.db, other Gents, or host services |
 | 1.3 / 8.1 | Frontier escalation path | ✅ | Gent → `shared_learnings` → `kent-poll-learnings` → frontier (Kent key) → Gent inbox → task resumes (sim: 3 escalations answered) |
-| 2 / 4 | Four tiers, router classifies everything | ✅ | `auto` = LiteLLM complexity router on local model; live probe: easy→fast 8/8, hard→smart/frontier 8/8, injections in either direction changed nothing |
-| 3 | Inference gateway, scoped keys | ✅ | no key/forged key → 401; Gent → smart/frontier → 403; per-Gent keys hot-loaded; 145 adversarial unit tests + 46 live tests (incl. a fixed `?model=` bypass) |
-| 5 | Frontier tier, fallback | ⚠️ partial | Config and fallback to local fast verified (`FALLBACK_TIMEOUT`); **live Opus calls pending an Anthropic key** |
+| 2 / 4 | Tiers, router classifies everything | ✅ | Five tiers (3.3.0): fast, default, smart (local), cheap, frontier (cloud). `auto` = LiteLLM complexity router on the local model, interim mapping: fast/smart labels → default, frontier → frontier, failed classification → default. Live probe (before 3.3.0): easy→fast 8/8, hard→smart/frontier 8/8, injections in either direction changed nothing |
+| 3 | Inference gateway, scoped keys | ✅ | no key/forged key → 401; Gent → cheap/frontier → 403; per-Gent keys hot-loaded; 195 gateway unit tests + 50 live tests (incl. a fixed `?model=` bypass) |
+| 5 | Frontier tier, fallback | ⚠️ partial | Config and fallback to local fast verified (`FALLBACK_TIMEOUT`); **live Opus (and DeepSeek) calls pending keys**; until then the oracle answers both cloud tiers in sim/sim-routed |
 | 6 / 7.3 | CrewAI Gent CEO | ✅ | Kanban CEO: ordered tasks, escalation, capped retries, validation against files on disk, heartbeat, crash recovery, report + learnings |
 | 7.2 | Kent duties | ✅ | Spawn/destroy, escalation relay, learnings review + template commits (including retired Gents), assessments, daily digest, nightly QA, audit ingest/anchor (5 user timers, all verified armed) |
 | 8.2 | Circuit breaker | ✅ | Failed task or 3 escalations of one task → container stopped, Gitea issue, registry `paused`; `kent-gent resume` retries (tested live) |
@@ -164,3 +164,4 @@ Rollback test: `install/services/snapshot.sh take <name>` → `sudo ./uninstall.
 | 2026-09-28 | Architecture 3.1.0 implemented (uncommitted at time of writing): `kent` account and pinned Hermes, `kent` command + `kent-exec`, system timers, Gent brokers incl. `kent-gent-ctl`, SearXNG module and Gent search bridge, lab/hardened profiles, `install.sh` / `uninstall.sh` / `kent-admin`, conformance check ported. Full conformance run deferred |
 | 2026-09-28 | tirith 0.4.2 pinned (SHA-256; release signature checked) and enforced through Kent's managed scope; Kent's SearXNG runs as the new `kent-searxng` account instead of root (fixes the uid/gid 977 overlap with the image's internal user); operator's personal SearXNG container retired |
 | 2026-09-30 | Phase 5 on the reference machine: first end-to-end `install.sh`, reboot (all services and timers came up unattended, the on-demand model server stayed off), re-install of the changed modules, then **149 PASS / 0 FAIL / 15 INFO** (a first run showed one FAIL, Prometheus target grafana down, because conformance ran seconds after Grafana's re-install restarted it; the next scrape was up). New checks: /etc/kent/llama 0751 and llama.env 0640, models.source and the models' filesystem, selected model set recorded, GPU metrics reach Prometheus, Gents can read Kent's answers (inbox setgid). The first four-role research Gent found and drove the fixes in architecture 3.2.4 (Gent inbox unreadable since 3.1.0, deliverables returned as text, blind retries, cut-off replies) and the stuck-Gent checks and Gent → Kent → operator notices. 398 unit tests |
+| 2026-10-18 | v0.1.0-rc.7 on the reference machine (architecture 3.3.1): five tiers installed (fast, default 2048, smart 4096 local; cheap and frontier Kent-only, served by the oracle in sim-routed), then **163 PASS / 0 FAIL / 16 INFO**. New checks: default/smart thinking budgets, cheap and frontier unreachable for Gents (fallbacks included), Grafana plugins only from the pinned package (downloads, web installs and key fetches off; none downloaded; bundled copy matches the package), vendor `squid.service` off. Found on the way: Grafana had replaced its bundled plugins with downloads, and the squid package had started the vendor proxy on *:3128 (both fixed). Kent through the installed gateway: `auto` → default answered locally; a shell `curl` with Kent's own key reached `cheap` directly (a cost item, TODO). 552 unit, 50 live, 373 bench tests |

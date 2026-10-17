@@ -9,13 +9,15 @@
 #   state    /var/lib/litellm             (systemd StateDirectory)
 #   unit     kent-litellm.service         (127.0.0.1:4000)
 # Access is identity-based (kent_gateway.py, no PostgreSQL): one generated key per
-# identity -- operator and kent (all tiers), gent (local tiers only). The operator
+# identity -- operator and kent (all tiers), gent (local tiers only: fast, default, smart). The operator
 # receives the operator and kent keys under ~/.config/kent/; the gent key stays
-# root-only until Gents are deployed. The Anthropic key never leaves the service.
+# root-only until Gents are deployed. The cloud keys (Anthropic for frontier, DeepSeek
+# for cheap) never leave the service; each is optional until set.
 #
 # Usage:
 #   sudo ./install.sh [--config dev|prod|sim|sim-routed] [--fallback-timeout SECONDS] [--no-start] [--dry-run]
 #   sudo ./install.sh --set-anthropic-key          # prompt for the key, restart
+#   sudo ./install.sh --set-deepseek-key           # the same for the cheap tier's key
 #   sudo ./install.sh --set-fallback-timeout SECONDS   # change it, restart
 #
 # FALLBACK_TIMEOUT (in /etc/kent/litellm/litellm.env) is how long a hung cloud
@@ -25,7 +27,7 @@
 #
 # IMPORTANT: a short FALLBACK_TIMEOUT (e.g. 3s for testing) must be raised once a
 # real Anthropic key is set. Opus 5.5 routinely thinks for longer than a few
-# seconds, so every real smart/frontier call would time out and silently be
+# seconds, so every real frontier (or cheap) call would time out and silently be
 # answered by the local model instead. Use 120 in normal operation:
 #   sudo ./install.sh --set-anthropic-key
 #   sudo ./install.sh --set-fallback-timeout 120
@@ -52,7 +54,7 @@ MIN_SAFE_FALLBACK_TIMEOUT=60
 
 CONFIG_FLAVOR=""
 START=1
-SET_KEY=0
+SET_KEY=""    # anthropic | deepseek: prompt for that upstream key and restart
 FALLBACK_TIMEOUT=""
 SET_TIMEOUT=0
 while [[ $# -gt 0 ]]; do
@@ -60,7 +62,8 @@ while [[ $# -gt 0 ]]; do
         --config)            CONFIG_FLAVOR="$2"; shift 2 ;;
         --no-start)          START=0; shift ;;
         --dry-run)           DRY_RUN=1; shift ;;
-        --set-anthropic-key) SET_KEY=1; shift ;;
+        --set-anthropic-key) SET_KEY=anthropic; shift ;;
+        --set-deepseek-key)  SET_KEY=deepseek; shift ;;
         --fallback-timeout)  FALLBACK_TIMEOUT="$2"; shift 2 ;;
         --set-fallback-timeout) FALLBACK_TIMEOUT="$2"; SET_TIMEOUT=1; shift 2 ;;
         -h|--help)           sed -n '2,/^# =====/p' "$0" | sed '$d'; exit 0 ;;
@@ -90,16 +93,16 @@ ENV
     chown root:"$ACCOUNT" "$ENV_FILE"; chmod 0640 "$ENV_FILE"
 }
 
-# Loud warning when a real Anthropic key is present but the timeout is short.
+# Loud warning when a real cloud key is present but the timeout is short.
 warn_if_timeout_too_short() {
     [[ "$DRY_RUN" -eq 1 ]] && return 0
-    [[ -s "${CRED_DIR}/anthropic_api_key" && -s "$ENV_FILE" ]] || return 0
+    [[ ( -s "${CRED_DIR}/anthropic_api_key" || -s "${CRED_DIR}/deepseek_api_key" ) && -s "$ENV_FILE" ]] || return 0
     local current
     current="$(sed -n 's/^FALLBACK_TIMEOUT=//p' "$ENV_FILE")"
     if [[ "$current" =~ ^[0-9]+$ && "$current" -lt "$MIN_SAFE_FALLBACK_TIMEOUT" ]]; then
         warn "════════════════════════════════════════════════════════════════════"
-        warn "FALLBACK_TIMEOUT is ${current}s but an Anthropic key is set."
-        warn "Real Opus calls will time out and silently fall back to the local model."
+        warn "FALLBACK_TIMEOUT is ${current}s but a cloud key is set."
+        warn "Real cloud calls will time out and silently fall back to the local model."
         warn "Fix:  sudo $0 --set-fallback-timeout 120"
         warn "════════════════════════════════════════════════════════════════════"
     fi
@@ -116,18 +119,19 @@ if [[ "$SET_TIMEOUT" -eq 1 ]]; then
 fi
 
 # ─── Secret update only ──────────────────────────────────────────────────────
-if [[ "$SET_KEY" -eq 1 ]]; then
+if [[ -n "$SET_KEY" ]]; then
     manifest_has path "$CONF_DIR" || die "LiteLLM is not installed by Kent; run install first"
-    read -r -s -p "Anthropic API key (input hidden): " KEY; echo
+    label="$([[ "$SET_KEY" == anthropic ]] && echo Anthropic || echo DeepSeek)"
+    read -r -s -p "${label} API key (input hidden): " KEY; echo
     [[ -n "$KEY" ]] || die "empty key"
     if [[ "$DRY_RUN" -eq 1 ]]; then
-        echo "  [dry-run] write ${CRED_DIR}/anthropic_api_key (0600 root:root)"
+        echo "  [dry-run] write ${CRED_DIR}/${SET_KEY}_api_key (0600 root:root)"
     else
-        (umask 077; printf '%s' "$KEY" > "${CRED_DIR}/anthropic_api_key")
+        (umask 077; printf '%s' "$KEY" > "${CRED_DIR}/${SET_KEY}_api_key")
     fi
     unset KEY
     run systemctl restart "$UNIT"
-    log "Anthropic key updated; ${UNIT} restarted."
+    log "${label} key updated; ${UNIT} restarted."
     warn_if_timeout_too_short
     exit 0
 fi
@@ -183,6 +187,42 @@ run install -d -m 0755 -o root -g root "${VENV}/lib"
 run install -m 0644 -o root -g root "$HERE/kent_gateway.py" "${VENV}/lib/kent_gateway.py"
 
 # ─── 4. Config ───────────────────────────────────────────────────────────────
+# Gents may call only local tiers: every tier kent_gateway's POLICY grants the gent identity, and
+# every fallback of those tiers, must point at the local model server (kent_gateway also checks
+# each Gent call at run time). Read from the module's source, so POLICY stays the one place.
+log "checking that Gent tiers are local in $(basename "$SRC_CONFIG")"
+"${VENV}/bin/python" - "$SRC_CONFIG" "$HERE/kent_gateway.py" <<'GENTCHECK' || die "SECURITY: $(basename "$SRC_CONFIG") points a Gent tier off the local model server"
+import ast, sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+consts = {}
+for node in ast.parse(open(sys.argv[2]).read()).body:
+    target = getattr(node, "target", None) or (node.targets[0] if isinstance(node, ast.Assign) else None)
+    if isinstance(target, ast.Name) and target.id in ("POLICY", "LOCAL_MODEL_API_BASES"):
+        consts[target.id] = node.value
+def literal_set(call):
+    assert isinstance(call, ast.Call) and call.func.id == "frozenset", "expected frozenset({...})"
+    return set(ast.literal_eval(call.args[0]))
+gent = next(v for k, v in zip(consts["POLICY"].keys, consts["POLICY"].values) if ast.literal_eval(k) == "gent")
+gent_models = literal_set(next(v for k, v in zip(gent.keys, gent.values) if ast.literal_eval(k) == "models"))
+local = {b.rstrip("/") for b in literal_set(consts["LOCAL_MODEL_API_BASES"])}
+fallbacks = {}
+for entry in (cfg.get("router_settings") or {}).get("fallbacks") or []:
+    for k, v in entry.items():
+        fallbacks.setdefault(k, []).extend(v)
+tiers = set(gent_models)
+for t in list(gent_models):
+    tiers.update(fallbacks.get(t, []))
+bad = []
+for m in cfg.get("model_list") or []:
+    if m.get("model_name") in tiers:
+        lp = m.get("litellm_params") or {}
+        if str(lp.get("api_base") or "").rstrip("/") not in local or not str(lp.get("model", "")).startswith("openai/"):
+            bad.append(f"{m['model_name']} -> {lp.get('model')} at {lp.get('api_base') or 'provider default'}")
+missing = tiers - {m.get("model_name") for m in cfg.get("model_list") or []}
+if bad or missing:
+    sys.exit(f"Gent tiers {sorted(tiers)}: not local: {bad}; missing: {sorted(missing)}")
+print(f"  Gent tiers {sorted(tiers)} all on {sorted(local)}")
+GENTCHECK
 # No database: drop any database/master-key settings; auth is kent_gateway's.
 claim_path path "$CONF_DIR"
 ensure_dir "$CONF_DIR" 0750 root "$ACCOUNT"
@@ -224,9 +264,11 @@ for identity in operator kent gent metrics; do
         fi
     fi
 done
-if [[ ! -e "${CRED_DIR}/anthropic_api_key" ]]; then
-    run install -m 0600 -o root -g root /dev/null "${CRED_DIR}/anthropic_api_key"
-fi
+for upstream in anthropic deepseek; do    # empty until set: the tier's calls fail and fall back to fast
+    if [[ ! -e "${CRED_DIR}/${upstream}_api_key" ]]; then
+        run install -m 0600 -o root -g root /dev/null "${CRED_DIR}/${upstream}_api_key"
+    fi
+done
 
 # The operator's own key, in the operator's home (e.g. for a personal Hermes or scripts).
 # Kent's key is not copied here: Kent runs as the kent account and reads its own copy
@@ -264,7 +306,8 @@ if [[ "$START" -eq 1 && "$DRY_RUN" -eq 0 ]]; then
     KENT_KEY="$(cat "${CRED_DIR}/kent_key")"; GENT_KEY="$(cat "${CRED_DIR}/gent_key")"
     NOAUTH=$(code "" GET /v1/models)
     KENT_MODELS=$(code "$KENT_KEY" GET /v1/models)
-    GENT_SMART=$(code "$GENT_KEY" POST /v1/chat/completions smart)
+    GENT_FRONTIER=$(code "$GENT_KEY" POST /v1/chat/completions frontier)
+    GENT_CHEAP=$(code "$GENT_KEY" POST /v1/chat/completions cheap)
     GENT_ADMIN=$(code "$GENT_KEY" POST /key/generate)
     # Regression (found by tests/live): LiteLLM also takes the model from the
     # query string; a restricted identity must be refused, not routed.
@@ -272,10 +315,11 @@ if [[ "$START" -eq 1 && "$DRY_RUN" -eq 0 ]]; then
     unset KENT_KEY GENT_KEY
     [[ "$NOAUTH" == "401" ]]      || die "gateway served /v1/models without a key (HTTP $NOAUTH)"
     [[ "$KENT_MODELS" == "200" ]] || die "gateway rejected the kent key (HTTP $KENT_MODELS); see: journalctl -u ${UNIT}"
-    [[ "$GENT_SMART" == "403" ]]  || die "SECURITY: gent key was not refused on tier 'smart' (HTTP $GENT_SMART)"
+    [[ "$GENT_FRONTIER" == "403" ]] || die "SECURITY: gent key was not refused on tier 'frontier' (HTTP $GENT_FRONTIER)"
+    [[ "$GENT_CHEAP" == "403" ]]  || die "SECURITY: gent key was not refused on tier 'cheap' (HTTP $GENT_CHEAP)"
     [[ "$GENT_ADMIN" == "403" ]]  || die "SECURITY: gent key was not refused on an admin route (HTTP $GENT_ADMIN)"
     [[ "$GENT_QUERY" == "403" ]]  || die "SECURITY: gent key with ?model=frontier was not refused (HTTP $GENT_QUERY)"
-    log "OK: ${UNIT} is up; no key 401, kent 200, gent refused on smart, admin routes and query-string model."
+    log "OK: ${UNIT} is up; no key 401, kent 200, gent refused on frontier, cheap, admin routes and query-string model."
 
     # Hermes-style request (carries reasoning_effort) against the local tier.
     # Non-fatal: the local llama.cpp server may legitimately be stopped.

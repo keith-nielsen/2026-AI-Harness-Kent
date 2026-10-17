@@ -24,10 +24,7 @@ updates:
 
 security:
   redact_secrets: true
-  tirith_enabled: true                  # pre-exec command scanner (also pinned in the managed .env)
-  tirith_path: /opt/kent-hermes/bin/tirith   # explicit path: Hermes never auto-downloads
-  tirith_timeout: 5
-  tirith_fail_open: true                # lab; hardened fails closed
+  allow_lazy_installs: false            # never pip-install optional features at runtime (pinned install)
 
 web:
   backend: searxng

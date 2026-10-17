@@ -5,6 +5,8 @@
 #   tools    /opt/kent-core/bin (audit chain, digest, learnings/escalation relay + circuit
 #            breaker, QA audit, kent-gent) and the human-facing `kent` command
 #            (/usr/local/bin/kent → /opt/kent-core/bin/kent)
+#   broker   /opt/kent-core/libexec/kent-broker (kent-broker.socket, /run/kent-broker.sock 0600 kent):
+#            runs Kent's own tools outside Hermes's sandbox; kent-broker-client stands in for them inside
 #   entry    /opt/kent-core/libexec/kent-exec — Kent's side of `kent`, reachable only through
 #            /etc/sudoers.d/92-kent-operators (%kent-operators may run it as kent, nothing else)
 #   config   /etc/kent/kent/kent.conf, credentials/ (Kent's gateway key and Gitea token, copied
@@ -41,7 +43,7 @@ ensure_dir "$OPT" 0755 root root
 ensure_dir "$OPT/bin" 0755 root root
 ensure_dir "$OPT/libexec" 0755 root root
 for f in "$HERE"/bin/*.py "$HERE/bin/kent"; do run install -m 0755 -o root -g root "$f" "$OPT/bin/"; done
-run install -m 0755 -o root -g root "$HERE/libexec/kent-exec" "$OPT/libexec/kent-exec"
+for f in kent-exec kent-broker kent-broker-client; do run install -m 0755 -o root -g root "$HERE/libexec/$f" "$OPT/libexec/$f"; done
 for f in "$KENT_ROOT/schemas/kent.sql" "$KENT_ROOT/schemas/stack.sql"; do run install -m 0644 -o root -g root "$f" "$OPT/"; done
 # Command names Kent itself uses (its SOUL and skills refer to these; its PATH has $OPT/bin).
 for t in gent:kent_gent audit:kent_audit digest:kent_digest poll-learnings:kent_poll_learnings qa-audit:kent_qa_audit; do
@@ -60,6 +62,9 @@ cat > "$WORK/sudoers" <<EOF
 # else. kent-exec validates its arguments and records the calling human in the audit chain.
 # Installed by install/services/kent-core/install.sh; removed by its uninstall.
 %kent-operators ALL=(kent) NOPASSWD: $OPT/libexec/kent-exec
+# sudo -C: the kent command hands Kent the folders an operator grants as open descriptors
+# (kent --grant DIR); kent-exec checks each and closes every other descriptor.
+Defaults!$OPT/libexec/kent-exec closefrom_override
 EOF
 visudo -cf "$WORK/sudoers" >/dev/null || die "sudoers syntax check failed"
 place_file file "$WORK/sudoers" /etc/sudoers.d/92-kent-operators 0440 root root
@@ -112,11 +117,26 @@ run systemctl daemon-reload
 # enable, then restart: an already-active timer keeps its old schedule until restarted.
 for u in "${UNITS[@]}"; do run systemctl enable "$u.timer"; run systemctl restart "$u.timer"; done
 
+# --- Broker: Kent's own tools, run outside Hermes's sandbox (docs/design/kent-sandbox.md §4) -------
+for u in kent-broker.socket kent-broker@.service; do place_file unit "$HERE/systemd/$u" "/etc/systemd/system/$u" 0644 root root; done
+run systemctl daemon-reload
+run systemctl enable kent-broker.socket
+run systemctl restart kent-broker.socket
+run rm -rf /run/kent-broker   # socket directory of the first draft (root-owned, unreachable for kent)
+
 # --- Operator (single-operator setup: the human who ran the installer) ----------------------------
 if ! id -nG "$OP" | tr ' ' '\n' | grep -qx kent-operators; then
     run usermod -aG kent-operators "$OP"
     manifest_add member "kent-operators $OP"
     log "added $OP to kent-operators (takes effect at next login, or: newgrp kent-operators)"
+fi
+# Grants (kent --grant DIR, docs/design/kent-sandbox.md §5): the kent account may pass through the
+# operator's home to a granted folder, never list or read the home itself (ACL u:kent:--x).
+OPHOME="$(getent passwd "$OP" | cut -d: -f6)"
+if [[ -d "$OPHOME" && "$OPHOME" != / ]] && ! getfacl -cp "$OPHOME" 2>/dev/null | grep -qx 'user:kent:--x'; then
+    run setfacl -m u:kent:x "$OPHOME"
+    manifest_add acl "kent $OPHOME"
+    log "kent may pass through $OPHOME to folders you grant (not list it)"
 fi
 
 # --- Verify ------------------------------------------------------------------------------------------
@@ -139,7 +159,15 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     [[ "$n" -ge 5 ]] || die "expected 5 armed kent timers, found $n"
     # As the operator (a fresh login session picks up the new group membership):
     runuser -u "$OP" -- /usr/local/bin/kent status >/dev/null || die "'kent status' failed for $OP"
-    log "OK: kent-core installed; audit chain valid; digest written; $n timers armed; 'kent' works for $OP"
+    # The broker answers Kent the way the sandbox does (the client under a tool's name) and refuses
+    # what is not on its list.
+    T="$(runuser -u kent -- mktemp -d "$DATA/work/broker-check.XXXXXX")"
+    runuser -u kent -- ln -s "$OPT/libexec/kent-broker-client" "$T/kent-audit"
+    b="$(cd "$T" && runuser -u kent -- "$T/kent-audit" verify 2>&1)" || { rm -rf "$T"; die "kent-broker did not answer (got: ${b:0:160})"; }
+    r="$(cd "$T" && runuser -u kent -- "$T/kent-audit" anchor 2>&1)" && { rm -rf "$T"; die "kent-broker accepted a command it must refuse"; }
+    rm -rf "$T"
+    [[ "$r" == *kent-broker:* ]] || die "kent-broker refusal not reported (got: ${r:0:160})"
+    log "OK: kent-core installed; audit chain valid; digest written; $n timers armed; broker answers; 'kent' works for $OP"
 fi
 audit_event "install completed"
 log "done."

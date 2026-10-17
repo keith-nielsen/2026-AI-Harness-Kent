@@ -1,0 +1,70 @@
+#!/bin/bash
+# Kent's Hermes entry point: always as the kent account, clean environment, Kent's home and the
+# administrator-pinned policy, inside a bubblewrap sandbox (docs/design/kent-sandbox.md).
+# Installed by install/services/hermes/install.sh as /opt/kent-hermes/bin/kent-hermes.
+#
+#   kent-hermes [--grant FD PATH | --grant-rw FD PATH]... [--] [hermes args]
+#
+# A grant is a folder the operator's `kent` command opened and handed over as descriptor FD; it is
+# mounted at PATH (its real path) inside. kent-exec validates both (owner, forbidden trees, audit);
+# this script checks only their form. The descriptors are closed inside before Hermes starts, so
+# nothing in the sandbox holds a handle on the host's tree.
+set -euo pipefail
+die() { echo "kent-hermes: $*" >&2; exit 1; }
+[ "$(id -un)" = kent ] || die "must run as the kent account (use: kent)"
+
+KHOME=/var/lib/kent
+BROKER_SOCK=/run/kent-broker.sock
+CLIENT=/opt/kent-core/libexec/kent-broker-client
+BROKERED=(kent-gent kent-audit kent-digest kent-qa-audit kent-poll-learnings kent_notices_hook.py)
+
+grants=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --grant|--grant-rw)
+            [ $# -ge 3 ] || die "$1 needs a descriptor and a path"
+            [[ "$2" =~ ^([3-9]|10)$ ]] || die "bad grant descriptor: $2"
+            [[ "$3" == /* && "$3" != *"/../"* && "$3" != *"/./"* && "$3" != */.. ]] || die "bad grant path: $3"
+            if [ "$1" = --grant ]; then grants+=(--ro-bind-fd "$2" "$3"); else grants+=(--bind-fd "$2" "$3"); fi
+            shift 3 ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+[ "${#grants[@]}" -le 24 ] || die "at most 8 grants"
+
+profile=(
+    --unshare-all --share-net --die-with-parent --cap-drop ALL
+    # System, read-only. /bin, /lib, /lib64, /sbin are symlinks into /usr on this distribution.
+    --ro-bind /usr /usr
+    --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/sbin /sbin
+    --ro-bind /etc /etc
+    # The only secrets the kent account can read; every other module's /etc/kent/<x> is closed to it.
+    --tmpfs /etc/kent/kent/credentials
+    --ro-bind /run/systemd/resolve /run/systemd/resolve
+    --ro-bind /opt/kent-hermes /opt/kent-hermes
+    --ro-bind-try /opt/kent-core /opt/kent-core     # absent while only the hermes module is installed
+    --proc /proc --dev /dev
+    --tmpfs /tmp --tmpfs /var/tmp
+    # Kent's home: a throwaway tmpfs (caches, dotfiles) with only Hermes's state and the scratch
+    # directory kept. kent.db, the audit chain, digests and inbox are not mounted at all.
+    --tmpfs "$KHOME"
+    --bind "$KHOME/hermes" "$KHOME/hermes"
+    --bind "$KHOME/work" "$KHOME/work"
+    --ro-bind-try "$BROKER_SOCK" "$BROKER_SOCK"
+)
+# Kent's privileged and estate-writing tools run in the broker; inside they are the client.
+for t in "${BROKERED[@]}"; do
+    [ -e "/opt/kent-core/bin/$t" ] || continue
+    [ -x "$CLIENT" ] || die "kent-core installed without the broker client; re-run its installer"
+    profile+=(--ro-bind "$CLIENT" "/opt/kent-core/bin/$t")
+done
+
+exec env -i PATH=/opt/kent-core/bin:/usr/local/bin:/usr/bin:/bin \
+    TERM="${TERM:-dumb}" COLUMNS="${COLUMNS:-}" LINES="${LINES:-}" \
+    KENT_PRINCIPAL="${KENT_PRINCIPAL:-${SUDO_USER:-kent}}" \
+    /usr/bin/bwrap "${profile[@]}" "${grants[@]}" --chdir "$KHOME/work" \
+    --setenv HOME "$KHOME" --setenv HERMES_HOME "$KHOME/hermes" \
+    --setenv HERMES_MANAGED_DIR /etc/kent/hermes/managed --setenv KENT_CONF /etc/kent/kent/kent.conf \
+    --setenv LANG C.UTF-8 \
+    -- /bin/bash -c 'exec 3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&- 10<&-; exec /opt/kent-hermes/venv/bin/hermes "$@"' kent-hermes "$@"

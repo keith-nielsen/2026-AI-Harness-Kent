@@ -1,0 +1,25 @@
+[Unit]
+Description=Kent: broker request (runs one of Kent's own tools outside the sandbox)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/kent-core/libexec/kent-broker
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+User=kent
+Group=kent
+WorkingDirectory=/var/lib/kent
+UMask=0027
+# kent-gent wait accepts up to 24 h.
+TimeoutStartSec=25h
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# Not NoNewPrivileges/ProtectSystem=strict: kent-gent reaches the root-owned Gent brokers
+# through sudo, which needs setuid execution and /run/sudo (as kent-poll-learnings.service).
+ProtectSystem=full

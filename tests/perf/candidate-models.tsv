@@ -1,0 +1,8 @@
+FINAL-Bench/Ourbox-35B-JGOS-GGUF	ourbox35b-Q4_K_M.gguf	1c61fa9a8d23bc5b2946935c9f6b9d1d2887a374	122158e67b122ede0f22808a30ff7ea3ee31d244db94f4dccfa77e212e02c627	21166757536	gated=False
+mradermacher/0GM-1.0-35B-A3B-0427-GGUF	0GM-1.0-35B-A3B-0427.Q4_K_M.gguf	d2ca9b1b1d26b7b19676196bacfd73afd6f40d47	7bf3b62ad80cc90e72ae7d7a72dc8edd14aae4cb31a32bb7bf3d32584cfad6d0	21166754816	gated=False
+Accio-Lab/occamy-1.0-GGUF	occamy-1.0-Q4_K_M.gguf	e8fe5e28e1b1c1f0cd0a39b85b16b631f17ca14e	ffb25f763ff9c27f5f4e2adcdef399c5654f9f840fdac33dffe7035ba8266a87	21166757696	gated=False
+samuelcardillo/Carnice-Qwen3.6-MoE-35B-A3B-GGUF	Carnice-Qwen3.6-MoE-35B-A3B-Q4_K_M.gguf	36280156b43acad5bd1c53fde19731ae276cfd56	4879cd1bc36d42c77bd935b92e27c80020fd6294468df308574e2e061878f58d	21166757824	gated=False
+mudler/Carnice-Qwen3.6-MoE-35B-A3B-APEX-GGUF	Carnice-Qwen3.6-MoE-35B-A3B-APEX-I-Quality.gguf	05a97871b0ee47a691d16b20e0f16b9833a463bf	f1fef05db8f1fd8d6b346320af393e64ab91c837ec621c09f5bcf99ece837876	22819403328	gated=False
+bartowski/Accio-Lab_occamy-1.0-GGUF	Accio-Lab_occamy-1.0-Q4_K_M.gguf	104e2b7e9960c8dc280fc7efad049d55c3697dad	a1c8f49661c12c219cf2dfe2e9c9ee6ebeddccb351e979f191e24d89cd0727c6	22318512736	gated=False
+unsloth/Qwen3.6-35B-A3B-MTP-GGUF	Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf	5bc3e238d916f48a861bac2f8a1990a0e9b7e98d	35fce994cd36104a7dc1bd8a4bdf13778145664c00fdef6773aebc9246e5019c	32611711264	gated=False
+unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF	NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_XL.gguf	main	112bf957489a497c18f60bf8bd44ee1dfa05e87368b8ed7f68998a4e38f275c9	25505724480	license=openmdw-1.1

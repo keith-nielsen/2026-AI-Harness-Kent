@@ -83,8 +83,9 @@ Select the closest matching template from the table above. Then customise:
 4. **Order the tasks**: the Gent CEO runs tasks one at a time in `tasks.yaml` order,
    and each task sees the results of the earlier ones. Put dependencies first.
 
-5. **Plan for the local model**: every Gent worker runs on the local `fast` tier; Gents
-   cannot use smart or frontier. Keep each task small and concrete, with one deliverable
+5. **Plan for the local model**: Gents run only on the local model: `fast` (no thinking), or
+   `default`/`smart` (the same model thinking first); they cannot use the cloud tiers (`cheap`,
+   `frontier`). Keep each task small and concrete, with one deliverable
    named in `output:` (see "Spawning"). Where a task needs expert judgement a small model is likely to get wrong
    (licensing, security-critical choices, novel design), mark it `escalate: true` with a
    precise `question`: you (Kent) will answer it on frontier before the team starts.
@@ -128,7 +129,7 @@ On approval, generate the crew configuration files:
 
 1. Run the generation script:
    ```
-   python3 ${HERMES_SKILL_DIR}/scripts/generate_crew.py \
+   /usr/bin/python3 ${HERMES_SKILL_DIR}/scripts/generate_crew.py \
      --template <template_name> \
      --output-dir <staging_dir> \
      --project-name "<operator's project name>" \

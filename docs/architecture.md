@@ -1,12 +1,118 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.6
-date: 2026-10-02
+version: 3.3.1
+date: 2026-10-18
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.3.1
+    date: 2026-10-18
+    summary: >
+      Grafana plugins pinned with the package. Grafana downloaded and updated about 17
+      plugins from grafana.com on every start, and those copies override the ones bundled in
+      the pinned .deb; the 3.3.0 install failed its data-source check while the prometheus
+      plugin was being replaced. kent.conf now turns off plugin preinstall and web installs,
+      the installer empties /var/lib/grafana/plugins, refreshes the vendor unit's
+      /var/lib/grafana/plugins-bundled from the package (root-owned; it was empty here, so
+      Grafana had run on downloaded copies only) and checks that prometheus and loki are
+      the bundled versions (13.1.7, 13.2.0), the health check waits up to 30 s, and
+      conformance fails on any downloaded plugin; plugin signatures use the package's own key
+      (no key fetch). Tested on a scratch Grafana 13.2.2 started with the vendor unit's paths: no
+      downloads and no outbound connections in 60 s, both data sources healthy, all 24 dashboard
+      queries answered. Found in the same audit: installing the squid package had also started
+      the vendor squid.service (a proxy on *:3128, loopback clients allowed, LAN refused); the
+      gent installer now switches it off when Kent installed the package, and conformance checks it.
+  - version: 3.3.0
+    date: 2026-10-17
+    summary: >
+      Five tiers (operator decision): fast (local, thinking off), default (local, thinking
+      up to 2048 tokens), smart (local, thinking up to 4096), cheap (DeepSeek V4.1 Flash,
+      cloud; a placeholder, nothing routes to it yet) and frontier (Claude Opus 5.5, cloud).
+      The cloud tiers are Kent's (and the operator's); Gents stay local-only (router, fast,
+      default, smart), enforced by the gateway policy, the per-call upstream check, the
+      installer guard and conformance. smart drops from 8192 to 4096: on the 42 hard probes
+      4096 passed 74.6% (= 8192) at 23% less time; default is 2048 because on all 115 probes
+      no classifier separated the prompts that are safe without thinking (thinking off
+      77.7% vs 2048 85.8%). Both thinking tiers time out at 900 s (longest probe call 604 s
+      at 4096). Interim `auto` until the triage step: the classifier's fast and smart labels
+      both go to default, frontier escalates, and a failed or timed-out classification goes to
+      default (it went to frontier before; a classifier timeout under load sent a one-line
+      sum to the cloud in the scratch test). New optional DeepSeek key (credential
+      deepseek_api_key, install.sh --set-deepseek-key, kent-admin set-deepseek-key); sim and
+      sim-routed send cheap to the oracle as model oracle-cheap. The call log adds routed_model
+      (the tier that served an auto call; routed_tier stays the classifier's label) and the
+      digest and dashboards group by it. Built and tested in the repo
+      2026-10-17 (unit, live, scratch gateway with the oracle); install pending (operator sudo).
+  - version: 3.2.11
+    date: 2026-10-16
+    summary: >
+      Tiers: smart is now the local model with thinking on, set per request by the
+      gateway (extra_body: chat_template_kwargs.enable_thinking, thinking_budget_tokens,
+      Qwen's thinking-mode sampling); router and fast send thinking off explicitly.
+      Frontier stays Claude Opus 5.5 (oracle in sim/sim-routed), the only cloud tier.
+      kent_gateway adds the thinking budget to the caller's max_tokens (reasoning counts
+      against it). Gents may now call smart (operator decision); every Gent call is
+      checked after routing and refused unless it lands on the local model server,
+      the installer refuses a config that points a Gent tier or its fallback elsewhere,
+      and conformance checks the installed tiers. Gent triage has three outcomes
+      (fast / think on smart / escalate); a rejected attempt is retried on smart.
+      Bench mode's gateway is chosen when the bench tools are installed (dev or
+      sim-routed). Thinking budget 8192, from the think-v1-1016 probe run (42 probes x 3:
+      74.6% pass, 65.1% at 2048, 41.3% thinking off); smart has its own 1200 s timeout
+      (thinking to the budget took up to 823 s) and the Gent client waits 1500 s. Built
+      and tested 2026-10-16; install pending (operator sudo).
+  - version: 3.2.10
+    date: 2026-10-16
+    summary: >
+      The local model server moves from the TheTom llama.cpp fork (c26cbdf; K q8_0 /
+      V turbo3, 256k, no speculative decoding) to upstream llama.cpp v0.6.0 (d812350,
+      built with GGML_CUDA_FA_QUANTS=all): Qwen3.6-35B-A3B MTP Q4_K_XL at 128k context,
+      K q8_0 / V q4_0, MTP with 2 drafts and no acceptance threshold (draft cache f16),
+      -ub 1024, every expert layer on the CPU, -lm none (v0.6.0 has no --no-mmap).
+      256k and turbo3 are retired (operator decision). Measured beforehand (kvcheck-10061119,
+      kv-quality: q8/q4 same quality as q8/q8; depth runs: MTP 2 p0 fastest at every depth)
+      and after the switch on Kent: one stream ~30 tok/s prose, both slots 40 tok/s
+      combined, peak VRAM 5.8 of 8 GB with both slots on 16K prompts, image input works
+      with MTP, conformance 149/0. The fork build is kept at /opt/kent-llama.forkc26cbdf
+      for rollback.
+  - version: 3.2.9
+    date: 2026-10-05
+    summary: >
+      The local model server no longer overrides its batch thread count (`-tb 4`
+      removed; llama.cpp then uses `-t`, 5). Every pass with more than one token
+      uses the batch threads, including each step while both slots are generating.
+      A formal A-B-B-A comparison under the bench host profile (tests/bench/tbcheck.sh,
+      decision rule fixed beforehand: keep the override only if it is 3% faster
+      somewhere and not 3% slower anywhere) found -tb 4 8% slower for two concurrent
+      decodes and 3% slower for concurrent real workloads, and no faster anywhere
+      (prompt processing identical).
+  - version: 3.2.8
+    date: 2026-10-05
+    summary: >
+      Starting or stopping the local model server no longer changes any host
+      performance setting. The kent-llama-tuning.service that switched SMT and CPU
+      boost off when kent-llama started wrote the boot values back when it stopped,
+      so every benchmark that stopped kent-llama to run its own server silently ran
+      with boost on (about 3.95 instead of 3.6 GHz, 82-86 C). It is retired: the
+      installer removes it from an existing install without running its restore step,
+      so SMT and boost stay exactly as they are. Host settings (SMT, boost, CPU
+      governor, swap, GPU clock lock) are now the operator's alone, set by hand with
+      tests/bench/hostprofile.sh (show, check, apply, defaults); no Kent service and no
+      bench job changes them, and bench jobs refuse to measure unless `check` passes
+      after kent-llama is stopped. The conformance check asserts that no tuning unit
+      exists.
+  - version: 3.2.7
+    date: 2026-10-03
+    summary: >
+      Kent's Hermes runs in a bubblewrap sandbox (§12.4): only its Hermes home, its scratch
+      directory and folders the operator grants per session (`--grant`, `--grant-rw`) are
+      writable or visible; kent.db, the audit chain and Kent's credentials are not mounted.
+      Kent's own tools (kent-gent, kent-audit, kent-digest, kent-qa-audit, kent-poll-learnings,
+      the notices hook) run outside through an allowlisting broker (kent-broker.socket), which
+      audits every request and fixes the audit entity to `kent`. Design:
+      docs/design/kent-sandbox.md.
   - version: 3.2.6
     date: 2026-10-02
     summary: >
@@ -105,8 +211,8 @@ changelog:
       is SHA-256-checked against an install-time record before every load. A
       polkit rule lets kent-operators start/stop/restart that one unit
       (`kent llama`, audited); a root oneshot applies and restores the CPU tuning
-      (SMT, boost). Addresses audit finding F-09 (model file permissions and
-      integrity).
+      (SMT, boost; retired in 3.2.8). Addresses audit finding F-09 (model file
+      permissions and integrity).
   - version: 3.1.0
     date: 2026-09-28
     summary: >
@@ -157,8 +263,10 @@ supervises the estate and delegates project work to disposable, isolated project
 teams (**Gents**: a CEO loop driving CrewAI workers in a locked-down container).
 Every model call from every entity goes through one gateway, which first asks a
 small local router model how hard the request is and then sends it to the
-matching tier: the local model for routine work, Claude Opus 5.5 for smart and
-frontier work, with automatic fallback to the local model when the cloud fails.
+matching tier: the local model answering directly for routine work, the same local
+model thinking first for reasoning work (two budgets), Claude Opus 5.5 for frontier work
+(DeepSeek V4.1 Flash is defined as a cheap cloud tier for later use), with automatic
+fallback to the local model when a tier fails.
 
 Gents only ever use the local model. When they need more, they escalate to Kent,
 who answers on the frontier tier. Gents publish what they learned; Kent judges
@@ -246,8 +354,8 @@ GENT (gent-<id8> — one per project, Docker, own Unix user)
 | Entity | Inference tiers | Data access | Network | Can spawn |
 |---|---|---|---|---|
 | Human (`operator` key) | all | everything | unrestricted | asks Kent (or runs `kent-gent`) |
-| Kent (`kent` key) | router, fast, smart, frontier, auto | kent.db (R/W); every Gent's stack.db (**read-only**) | unrestricted (host process) | Gents |
-| Gent CEO + workers (`gent-<id>` key) | router, fast | own stack.db (R/W) | gateway + egress proxy only | nothing |
+| Kent (`kent` key) | all: router, fast, default, smart, cheap, frontier, auto | kent.db (R/W); every Gent's stack.db (**read-only**) | unrestricted (host process) | Gents |
+| Gent CEO + workers (`gent-<id>` key) | router, fast, default, smart (local only) | own stack.db (R/W) | gateway + egress proxy only | nothing |
 | Prometheus (`metrics` key) | none | gateway `/metrics/` only | — | — |
 
 Enforced by `kent_gateway.py` (§3) and by filesystem ownership (§9, §14).
@@ -279,21 +387,43 @@ the ratio moves toward local as local models improve.
 | Logical name | Prod target | Dev / current reference machine | Used for |
 |---|---|---|---|
 | `router` | local llama.cpp model | same local model | classifying each `auto` request |
-| `fast` | local llama.cpp model | Qwen3.6-35B-A3B via `llama-server` on 127.0.0.1:8080 | routine, mechanical work; all Gent work |
-| `smart` | Claude Opus 5.5 | local model (dev config) | ordinary reasoning and coding |
-| `frontier` | Claude Opus 5.5 | local model (dev config) | hard problems, escalations, assessments, QA |
-| `auto` | router → fast / smart / frontier | same | the default for Kent and the operator |
+| `fast` | local llama.cpp model, thinking off | Qwen3.6-35B-A3B via `llama-server` on 127.0.0.1:8080 | routine, mechanical work; Gent tasks by default |
+| `default` | the same local model, thinking up to 2048 tokens | same | ordinary work: where `auto` sends a request unless it is classified up |
+| `smart` | the same local model, thinking up to 4096 tokens | same | harder reasoning and coding; Gent tasks triaged "think", Gent retries, learning reviews |
+| `cheap` | DeepSeek V4.1 Flash (Kent only) | local model (dev config); the oracle as `oracle-cheap` (sim, sim-routed) | reserved: defined so the tiering is in place; nothing routes to it yet |
+| `frontier` | Claude Opus 5.5 (Kent only) | local model (dev config); the oracle (sim, sim-routed) | hard problems, escalations, assessments, QA |
+| `auto` | router → default / frontier (interim, see §4) | same | the default for Kent and the operator |
 
-smart and frontier point at the same model today; they will be differentiated later.
+default and smart are fast's model with thinking turned on per request, so they need no
+second model and no extra VRAM. The gateway sets it in each deployment's `extra_body`, which overrides
+the caller: `chat_template_kwargs.enable_thinking: true`, `thinking_budget_tokens` (the
+server stops the reasoning there) and Qwen's thinking-mode sampling (temperature 1.0,
+top_p 0.95, top_k 20, presence_penalty 1.5). llama-server counts reasoning tokens against
+`max_tokens`, so kent_gateway adds the budget to the caller's `max_tokens` after routing
+(`thinking_max_tokens`). router and fast send `enable_thinking: false` explicitly.
+
+The budgets come from the 2026-10-17 budget curve on all 115 bench probes (production
+server; 42 hard probes x 3 repeats, 73 easy probes x 1-3): pass rate off 77.7% / 2048 85.8% /
+4096 88.1% / 8192 87.2%. On the hard probes 4096 passed 74.6% against 65.1% at 2048 (8 vs 20
+discordant, p 0.036) and equalled 8192 at 23% less time, so smart is 4096. Easy probes gain
+nothing from thinking (off 98.6% vs 2048 97.7%, a third of the time), but no classifier tried
+(router, NVIDIA classifier, logprob triage: best AUROC 0.77) separates them reliably enough to
+send anything to thinking off, so the default thinks (2048). Thinking decodes at about 20 tok/s
+(Qwen's thinking sampling lowers MTP acceptance); the longest probe call took 430 s at 2048 and
+604 s at 4096, so both thinking tiers have their own `timeout`/`stream_timeout` of 900 s; on
+timeout they fall back to fast. Gent clients wait 1500 s, so a call that runs out of time comes
+back as the fallback answer, not a client timeout.
 
 ### 2.3 Gateway Configurations
 
-| Config | File | smart / frontier go to | Use |
+| Config | File | cloud tiers (frontier, cheap) go to | Use |
 |---|---|---|---|
-| prod | `configs/litellm_config.yaml` | `anthropic/claude-opus-5-5` | normal operation (needs an Anthropic key) |
+| prod | `configs/litellm_config.yaml` | `anthropic/claude-opus-5-5`, `deepseek/deepseek-v4.1-flash` (model id unverified until a key is tested) | normal operation (needs an Anthropic key; the DeepSeek key is optional) |
 | dev | `configs/litellm_config.dev.yaml` | the local model | local-only testing |
 | sim | `configs/litellm_config.sim.yaml` | the oracle fixture (`tests/sim/oracle.py`) | end-to-end simulations without a key; `auto` serves every tier locally |
-| sim-routed | `configs/litellm_config.sim-routed.yaml` | the oracle fixture, prod routing | try the tiers as they will behave with a key: `auto` sends smart/frontier to the oracle, which can answer with tool calls |
+| sim-routed | `configs/litellm_config.sim-routed.yaml` | the oracle fixture (`oracle-frontier`, `oracle-cheap`), prod routing | try the tiers as they will behave with keys: `auto` sends frontier to the oracle, which can answer with tool calls |
+
+In every config, router/fast/default/smart are the local model (default and smart thinking).
 
 Select with `install/services/litellm/install.sh --config dev|prod|sim`. No
 application code changes: every consumer uses logical names.
@@ -306,7 +436,8 @@ The local model is llama.cpp's `llama-server`, run on demand as `kent-llama.serv
 (a polkit rule allows exactly that unit and those verbs to `kent-operators`; the `kent`
 account cannot). It runs as `kent-llama` from a root-owned copy of the build in
 `/opt/kent-llama`, with settings in `/etc/kent/llama/llama.env` (the measured optimum:
-Qwen3.6-35B-A3B MTP, 256k context, `-ncmoe 40`, non-thinking; change with
+Qwen3.6-35B-A3B MTP Q4, 128k context, K q8_0 / V q4_0 cache, MTP 2 drafts, `-ncmoe 40`,
+non-thinking, upstream llama.cpp v0.6.0; change with
 `kent-admin llama set`). It serves two requests at once (`--parallel 2` with a unified KV
 cache, so each can use the whole context); the slot count is fixed in the launcher. Ownership of the model files follows the profile: in **lab** they
 stay the operator's (Kent only removes their write bits, so they must be world-readable, and
@@ -328,8 +459,11 @@ after `udisks2.service` (released first at shutdown) and unmounted lazily, so a 
 never stalls shutdown. Known limit: in lab the operator owns the model files, so a file could be
 swapped between the start-time hash check and the server opening it (hardened: root only).
 `kent-admin models rehash` after replacing a model logs one audit line per added, changed or removed file with the operator's
-name (`human:<name>`) and keeps the previous record as `models.sha256.<UTC time>`. SMT and
-CPU boost are switched off by a root oneshot while the server runs and restored after.
+name (`human:<name>`) and keeps the previous record as `models.sha256.<UTC time>`. Starting or
+stopping the server changes no host performance setting (3.2.8): SMT, CPU boost, the CPU governor,
+swap and the GPU clock lock are set only by the operator, by hand, with `tests/bench/hostprofile.sh`
+(`show` and `check` need no root; `apply` sets the bench profile and `defaults` the boot defaults,
+both with sudo). The llama.cpp settings were measured with SMT off and boost off.
 
 ### 2.5 Reference Hardware
 
@@ -359,8 +493,13 @@ identity and enforces a policy table.
 |---|---|---|---|
 | `operator` | systemd credential `operator_key` | all | all |
 | `kent` | systemd credential `kent_key` | all | all |
-| `gent` | systemd credential `gent_key` (tests) | router, fast | chat/completions, models |
-| `gent-<id>` | `/etc/kent/litellm/gent-keys/<id>.key` (written at spawn, hot-reloaded) | router, fast | chat/completions, models |
+| `gent` | systemd credential `gent_key` (tests) | router, fast, default, smart | chat/completions, models |
+| `gent-<id>` | `/etc/kent/litellm/gent-keys/<id>.key` (written at spawn, hot-reloaded) | router, fast, default, smart | chat/completions, models |
+
+A Gent call must also land on the local model server (`LOCAL_MODEL_API_BASES`): kent_gateway
+checks every Gent call after LiteLLM has resolved tier and fallback, and refuses it otherwise
+(`gent_upstream_refusal`); the installer refuses a config that points a Gent tier, or a
+fallback of one, anywhere else.
 | `metrics` | systemd credential `metrics_key` | none | `/metrics/` |
 
 Restricted identities get a deny-by-default request shape: no query string, no
@@ -397,13 +536,18 @@ tier. Tier definitions:
 | smart | ordinary engineering and knowledge work: writing/editing code, scoped debugging, explanations needing judgement |
 | frontier | hard or high-stakes work: open-ended design, subtle debugging, novel problems, long reasoning |
 
-An unclassifiable request goes to frontier ("when in doubt, escalate");
-classification times out after 15 s. Every decision is logged
+Interim mapping (3.3.0, until the triage step replaces this classifier): the labels fast and
+smart both go to the `default` tier and frontier to `frontier`; nothing goes to thinking off.
+An unclassifiable request, or a classification that fails or times out (15 s), goes to
+default; before 3.3.0 it went to frontier, and under load a classifier timeout sent a
+one-line sum to the cloud. Every decision is logged
 (`routed_tier`, `routing_cause`) and shown in the digest and on Grafana.
 
-Measured (live probe, `tests/live/router_probe.py`): easy prompts → fast 8/8;
+Measured (live probe, `tests/live/router_probe.py`, before 3.3.0): easy prompts → fast 8/8;
 hard prompts → smart/frontier 8/8; prompt injections telling the router to
-downgrade or upgrade changed no decision.
+downgrade or upgrade changed no decision. On the 42 hard bench probes the same classifier
+sent 54% of the prompts that needed thinking to fast (2026-10-16), which is why its fast
+label no longer means thinking off.
 
 ---
 
@@ -421,11 +565,16 @@ downgrade or upgrade changed no decision.
 Claude Opus 5.5 (`claude-opus-5-5`) through LiteLLM's native Anthropic provider.
 The key is a systemd credential (`anthropic_api_key`), set with
 `install/services/litellm/install.sh --set-anthropic-key`. **Pending:** no key is
-configured on the reference machine yet, so smart/frontier fall back to local.
+configured on the reference machine yet, so frontier falls back to local.
+
+cheap is DeepSeek V4.1 Flash through LiteLLM's DeepSeek provider, with its own optional
+credential (`deepseek_api_key`, set with `--set-deepseek-key` or `kent-admin set-deepseek-key`).
+It is a placeholder (3.3.0): Kent-only, nothing routes to it, and without a key a call fails at
+once and falls back to fast. The model id is unverified until a key is tested.
 
 ### 5.3 Fallback — Live
 
-If a smart, frontier or auto call fails, the gateway answers from the local `fast`
+If a default, smart, cheap, frontier or auto call fails, the gateway answers from the local `fast`
 tier. `retry_policy` retries only where it helps (rate limits, provider 5xx) so
 retries don't multiply the wait. How long a cloud call may take before falling
 back is one variable, `FALLBACK_TIMEOUT` (`/etc/kent/litellm/litellm.env`;
@@ -719,9 +868,9 @@ tooling not built.
 
 ### 12.2 Gateway
 
-No key or a forged key → 401; a Gent key on smart/frontier, admin routes, a
-query-string model or a routing header → 403. Covered by 145 adversarial unit
-tests and 46 live tests with a canary upstream.
+No key or a forged key → 401; a Gent key on cheap/frontier, admin routes, a
+query-string model or a routing header → 403. Covered by the gateway unit tests
+(`tests/gateway`, 196) and 50 live tests with a canary upstream.
 
 ### 12.3 Containers
 
@@ -732,6 +881,28 @@ In-container self-test: 24 checks (workspace confinement, symlink escape, script
 confinement, proxy policy).
 
 Planned: key rotation, container image scanning.
+
+### 12.4 Kent's sandbox
+
+Kent's Hermes (and every shell, script and hook it starts) runs under `bwrap` from the
+`kent-hermes` launcher: own mount, PID, IPC and UTS namespaces, host network, all capabilities
+dropped, dies with its launcher. Read-only: `/usr`, `/etc` (Kent's credentials directory masked),
+`/opt/kent-hermes`, `/opt/kent-core`. Writable: `/var/lib/kent/hermes` and `/var/lib/kent/work`;
+the rest of Kent's home is a throwaway tmpfs, so kent.db, the audit chain, digests and inbox are
+absent. The operator's folders are absent unless granted for the session: `kent --grant DIR`
+(read-only) or `--grant-rw DIR`. The `kent` command opens each folder as the operator and hands
+it over as an open descriptor (`sudo -C`, sudoers `closefrom_override` for kent-exec only), so
+folders inside a home work; `kent-exec` accepts only directories the calling operator owns,
+outside system and Kent trees and not a whole home, audits each grant and closes every other
+descriptor; the launcher mounts them by descriptor and closes the descriptors inside.
+
+`sudo` cannot work inside (`no_new_privs`), and Kent's own tools need it and Kent's private
+state. They run outside through `kent-broker` (`/run/kent-broker.sock`, kent 0600, one process per
+request): inside, a client stands in for each tool name; the broker accepts only the listed
+tools and argument shapes, stages Gent project files without following symlinks, audits every
+request (`broker`) and refusal (`broker_refused`), and writes audit entries only as `kent`.
+The approval gate stays; for read-write grants it is still the only check (staged writes are
+the planned fix). Containment tests: operator-run (TODO.md).
 
 ---
 
@@ -773,7 +944,8 @@ No shared account, and no one logs in as `kent`. Two sudo rules make up the whol
 privilege surface: `%kent-operators ALL=(kent) NOPASSWD: kent-exec` (the only way
 into Kent; validates arguments, records `human:<name>` in the audit chain), and
 `kent ALL=(root) NOPASSWD:` the root-owned, argument-validated brokers
-`kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl`. One polkit rule adds that
+`kent-spawn-gent`, `kent-destroy-gent`, `kent-gent-ctl`. Kent's Hermes cannot use that rule
+itself (sandboxed, §12.4): its Gent tools reach it through `kent-broker`, outside the sandbox. One polkit rule adds that
 `kent-operators` may start, stop and restart `kent-llama.service` (no other unit or verb). Full detail:
 `docs/privilege-map.md`.
 
@@ -786,7 +958,7 @@ into Kent; validates arguments, records `human:<name>` in the audit chain), and
 |---|---|---|
 | Toolsets | incl. terminal, code execution, delegation | no code execution, no delegation |
 | Shell | general shell as `kent` (approval for dangerous commands) | plus denies for sudo, curl/wget, `python -c`, nc |
-| Both | tirith pre-exec scanning (pinned binary; fails open in lab, **closed** in hardened); one-shot and cron runs deny dangerous commands; yolo/oneshot re-entry, docker, managed-scope and credential paths denied; update checks off; secrets redacted | |
+| Both | Hermes' built-in dangerous-command detector (tirith left Hermes in v0.21.6); no runtime package installs; one-shot and cron runs deny dangerous commands; yolo/oneshot re-entry, docker, managed-scope and credential paths denied; update checks off; secrets redacted | |
 
 Switch with `sudo ./kent-admin profile lab|hardened`.
 
@@ -804,7 +976,9 @@ Gent container ── kent-gent-net (internal, 172.30.0.0/24, bridge kent-gent0;
 ```
 
 The bridges are systemd socket proxies (DynamicUser). `kent-squid` is Kent's own
-Squid instance (own account and config); the vendor `squid.service` is untouched.
+Squid instance (own account and config); the vendor `squid.service` is not used, and when Kent
+installed the squid package it switches that service off (the package starts it, listening on
+*:3128).
 
 ### 15.2 Rules — Live
 
@@ -928,7 +1102,8 @@ Tested: Linux Mint 22.3, built on Ubuntu 24.04 LTS (systemd 255, Docker 29, Pyth
 the installer accepts Ubuntu 24.04 and derivatives built on it. Third-party components
 are pinned in `install/services/versions.env`, each with its SHA-256: upstream release
 tarballs and binaries, and the Grafana and Alloy `.deb` packages (installed from the file;
-no apt source is added, so system updates cannot move them). Squid and base packages come
+no apt source is added, so system updates cannot move them). Grafana's plugins are the
+copies bundled in its package; its own plugin downloads and updates are turned off. Squid and base packages come
 from the distribution's own apt repositories. Downloads are kept in the installer's cache
 (`/var/cache/kent-install`, see §22). Other distributions are untested; Fedora/RHEL would need `dnf`, firewalld
 and SELinux policy for the Gent bind mounts.
@@ -955,9 +1130,11 @@ SSDs that stall writes during TRIM.
 
 ## 23. Scaling Path
 
-1. Add the Anthropic key; tune `FALLBACK_TIMEOUT`.
-2. Differentiate smart and frontier (e.g. a cheaper Claude model for smart).
-3. On bigger hardware, serve router/fast/smart from separate local models; shift
+1. Add the Anthropic key (and the DeepSeek key once cheap has a job); tune `FALLBACK_TIMEOUT`.
+2. default and smart are the local model thinking (3.3.0); on hardware too slow to think,
+   point them at a cloud model instead, after taking them out of the Gent policy (the
+   installer refuses a non-local Gent tier).
+3. On bigger hardware, serve router/fast/default/smart from separate local models; shift
    tiers from cloud to local by editing the gateway config only.
 4. Additional nodes: add deployments to the same logical names; LiteLLM balances
    and falls back. No consumer changes.
@@ -972,7 +1149,7 @@ SSDs that stall writes during TRIM.
 | Frontier cost runaway | only Kent/operator reach cloud tiers; 5 escalations per Gent per day; circuit breaker |
 | Gent compromise / exfiltration | internal network, read-only web through the proxy, no POST, private addresses denied, no host services |
 | Prompt injection via Gent output | Gent text labelled untrusted; judge/assessor prompts treat it as data; template content filter; Kent never executes Gent code |
-| Router misclassification | "when in doubt, frontier"; decisions logged and reviewed in the digest |
+| Router misclassification | interim `auto` sends everything to default except frontier escalations; a failed classification stays local; decisions logged and reviewed in the digest |
 | Knowledge poisoning across Gents | judge threshold + content filter + audit + revertible Gitea commits |
 | Log tampering | HMAC chain with journal anchors; chain break → Gitea issue |
 | Stuck or crashed Gent | heartbeat, requeue on restart, circuit breaker, pause/resume |

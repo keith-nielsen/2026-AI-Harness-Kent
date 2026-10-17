@@ -39,17 +39,40 @@ def _models(name: str) -> dict:
 def test_sim_routed_routes_like_prod_with_oracle_for_anthropic():
     prod, sim = _models("litellm_config.yaml"), _models("litellm_config.sim-routed.yaml")
     router = lambda m: m["auto"]["complexity_router_config"]  # noqa: E731
-    assert router(sim)["tiers"] == router(prod)["tiers"] == {"fast": "fast", "smart": "smart", "frontier": "frontier"}
+    # interim auto (until triage): nothing to thinking off; only frontier escalates
+    assert router(sim)["tiers"] == router(prod)["tiers"] == {"fast": "default", "smart": "default", "frontier": "frontier"}
     assert router(sim)["fallback_tier"] == router(prod)["fallback_tier"]
-    for tier in ("smart", "frontier"):
-        assert prod[tier]["model"].startswith("anthropic/")
-        assert sim[tier]["model"] == f"openai/oracle-{tier}"
-        assert sim[tier]["api_base"] == "http://127.0.0.1:4010/v1"
-    assert sim["fast"] == prod["fast"] and sim["router"] == prod["router"]
+    # a failed or timed-out classification stays local (default), never the cloud
+    for name in ("litellm_config.yaml", "litellm_config.dev.yaml", "litellm_config.sim.yaml",
+                 "litellm_config.sim-routed.yaml"):
+        r = router(_models(name))
+        assert r["tiers"][r["fallback_tier"]] == "default", name
+    assert prod["frontier"]["model"].startswith("anthropic/") and prod["cheap"]["model"].startswith("deepseek/")
+    # both cloud tiers go to the oracle, each under its own model name
+    assert sim["frontier"]["model"] == "openai/oracle-frontier" and sim["cheap"]["model"] == "openai/oracle-cheap"
+    assert sim["frontier"]["api_base"] == sim["cheap"]["api_base"] == "http://127.0.0.1:4010/v1"
+    # the local tiers are identical in prod and sim-routed
+    for t in ("router", "fast", "default", "smart"):
+        assert sim[t] == prod[t], t
+
+
+def test_default_and_smart_are_the_local_model_thinking_and_fast_is_not():
+    for name in ("litellm_config.yaml", "litellm_config.dev.yaml", "litellm_config.sim.yaml",
+                 "litellm_config.sim-routed.yaml"):
+        m = _models(name)
+        for tier, budget in (("default", 2048), ("smart", 4096)):
+            assert m[tier]["api_base"] == "http://127.0.0.1:8080/v1", (name, tier)
+            assert m[tier]["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True}, (name, tier)
+            assert m[tier]["extra_body"]["thinking_budget_tokens"] == budget, (name, tier)
+            # the longest probe call took 430 s at 2048 and 604 s at 4096 (2026-10-17); the Gent client
+            # waits 1500 s, so a timed-out call still comes back as the gateway's fast fallback
+            assert 604 < m[tier]["timeout"] == m[tier]["stream_timeout"] < 1500, (name, tier)
+        for tier in ("router", "fast"):
+            assert m[tier]["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}, (name, tier)
 
 
 def test_oracle_tiers_drop_unsupported_params():
     # Hermes sends reasoning_effort; without drop_params every oracle call fails and falls back.
     for name in ("litellm_config.sim.yaml", "litellm_config.sim-routed.yaml"):
         models = _models(name)
-        assert models["smart"].get("drop_params") is True and models["frontier"].get("drop_params") is True, name
+        assert all(models[t].get("drop_params") is True for t in ("smart", "cheap", "frontier")), name

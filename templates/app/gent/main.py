@@ -2,11 +2,12 @@
 
 Lifecycle:
   1. Seed the kanban from /data/project/tasks.yaml on first start.
-  2. Loop: claim the next backlog task; decide whether it needs escalation (tasks.yaml
-     `escalate: true` or the router's judgement); if so, publish an escalation_request
-     for Kent and mark the task blocked until Kent's answer arrives in /inbox.
-  3. Run a one-task crew on the local "fast" tier; validate the result; retry once
-     (told why the first attempt was rejected), then escalate. Final answers go to
+  2. Loop: claim the next backlog task; triage it (tasks.yaml `escalate: true` / `think: true`
+     or the router's judgement: fast, think or escalate); to escalate, publish an
+     escalation_request for Kent and mark the task blocked until Kent's answer arrives in /inbox.
+  3. Run a one-task crew on the local model: tier "fast", or "smart" (thinking on) when the
+     triage says think; validate the result; retry once on "smart" (told why the first
+     attempt was rejected), then escalate. Final answers go to
      /data/workspace/outputs/<task>.md; a task's named deliverable (tasks.yaml
      `output:`) is saved from the final answer when the agent did not write it.
   4. When every task is done: write REPORT.md, publish transferable learnings to
@@ -34,7 +35,7 @@ import requests
 import yaml
 
 from gent.crew import build_crew
-from gent.router import needs_escalation
+from gent.router import triage
 
 STACK_ID = os.environ.get("STACK_ID", "unknown")
 DATA = Path(os.environ.get("GENT_DATA", "/data"))
@@ -256,12 +257,17 @@ def workspace_evidence(since: float, limit: int = 12000) -> str:
 def run_task(key: str, c, task) -> bool:
     spec = json.loads(task["description"])
     project = yaml.safe_load((PROJECT / "project.yaml").read_text()) or {}
+    route = "fast"
     if "expert_answer" not in spec:
         forced = bool(spec.get("escalate"))
-        want, question = (True, spec.get("question") or spec["description"]) if forced else needs_escalation(key, spec["description"])
-        if want:
+        route, question = ("escalate", spec.get("question") or spec["description"]) if forced \
+            else triage(key, spec["description"])
+        if route == "escalate":
             escalate(c, task, question or spec["description"])
             return True
+    # The local model thinks first (gateway tier "smart") when the triage asks for it, when tasks.yaml
+    # says `think: true`, or on a retry after the reviewer rejected an attempt; otherwise "fast".
+    tier = "smart" if route == "think" or spec.get("think") or task["retry_count"] > 0 else "fast"
     target = output_path(spec)
     description = (f"Project: {project.get('name')} — {project.get('goal')}\n\n"
                    f"Today's date (UTC): {today()}.\n\n"
@@ -286,7 +292,7 @@ def run_task(key: str, c, task) -> bool:
             hb.execute("UPDATE kanban SET heartbeat_at=datetime('now') WHERE task_id=?", (task["task_id"],))
 
     crew = build_crew(key, spec.get("agent", ""), description, spec.get("expected_output", ""), on_step=heartbeat,
-                      max_tokens=spec.get("max_tokens"))
+                      max_tokens=spec.get("max_tokens"), tier=tier)
     started = time.time()
     result = crew.kickoff()
     output = getattr(result, "raw", str(result))
@@ -306,13 +312,13 @@ def run_task(key: str, c, task) -> bool:
                              f"\n\nFINAL ANSWER:\n{output[:4000]}\n\n{workspace_evidence(started)}", 200), {})
     if verdict.get("passed", False):
         set_status(c, task["task_id"], "done", completed_at=datetime.now(timezone.utc).isoformat(), output_summary=output[:4000])
-        log(f"task {task['task_id']} done")
+        log(f"task {task['task_id']} done (tier {tier})")
         extra = {}
         if spec.get("verdict"):
             src = target.read_text(errors="replace") if target is not None and target.exists() else output
             extra["verdict"] = review_verdict(src)
         emit(c, "task_done", task["task_id"], f"{task['task_id']} done", files=files_since(started),
-             retries=task["retry_count"], escalated="expert_answer" in spec, **extra)
+             retries=task["retry_count"], escalated="expert_answer" in spec, tier=tier, **extra)
         return True
     retries = task["retry_count"] + 1
     if retries > MAX_RETRIES:

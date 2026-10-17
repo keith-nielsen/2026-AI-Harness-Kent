@@ -42,7 +42,7 @@ jobs:
                       yaml.safe_load(p.read_text())
                   elif p.suffix == ".json":
                       json.loads(p.read_text())
-                  elif p.suffix == ".py" or p.name in ("kent-spawn-gent", "kent-destroy-gent", "kent-gent-ctl", "kent-exec", "kent"):
+                  elif p.suffix == ".py" or p.name in ("kent-spawn-gent", "kent-destroy-gent", "kent-gent-ctl", "kent-exec", "kent-broker", "kent-broker-client", "kent"):
                       py_compile.compile(str(p), doraise=True)
               except Exception as e:  # noqa: BLE001
                   errors.append(f"{p}: {e}")
@@ -54,7 +54,7 @@ jobs:
           grep -q '^FROM python@sha256:' install/services/gent/image/Dockerfile
           grep -c -- '--hash=sha256:' install/services/litellm/requirements.lock
           grep -c -- '--hash=sha256:' install/services/gent/image/requirements.lock
-          for v in PROMETHEUS NODE_EXPORTER LOKI GITEA UV HERMES_UVLOCK TIRITH; do grep -q "^${v}_SHA256=[0-9a-f]\{64\}$" install/services/versions.env; done
+          for v in PROMETHEUS NODE_EXPORTER LOKI GITEA UV HERMES_UVLOCK HERMES_PYTHON GRAFANA_DEB ALLOY_DEB; do grep -q "^${v}_SHA256=[0-9a-f]\{64\}$" install/services/versions.env; done
           grep -q '^SEARXNG_IMAGE=.*@sha256:[0-9a-f]\{64\}$' install/services/versions.env
           grep -q '^HERMES_COMMIT=[0-9a-f]\{40\}$' install/services/versions.env
 

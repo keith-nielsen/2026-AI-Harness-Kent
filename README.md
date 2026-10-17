@@ -1,9 +1,9 @@
 # Kent — Reference Agentic AI Stack
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Architecture](https://img.shields.io/badge/Architecture-v3.2.6-green)](docs/architecture.md)
+[![Architecture](https://img.shields.io/badge/Architecture-v3.3.1-green)](docs/architecture.md)
 [![Status](https://img.shields.io/badge/Status-v0.1.0--rc-orange)](https://github.com/keith-nielsen/2026-AI-Harness-Kent/releases)
-[![Conformance](https://img.shields.io/badge/Conformance-149%20pass%20%2F%200%20fail-brightgreen)](docs/conformance.md)
+[![Conformance](https://img.shields.io/badge/Conformance-163%20pass%20%2F%200%20fail-brightgreen)](docs/conformance.md)
 [![Validate](https://github.com/keith-nielsen/2026-AI-Harness-Kent/actions/workflows/validate.yml/badge.svg)](.github/workflows/validate.yml)
 
 **A reference template for a well-designed, fully integrated, self-hosted agentic
@@ -16,8 +16,9 @@ banking- or medical-class workloads.
 A persistent agent (**Kent**) works with the operator and supervises the estate.
 Project work is delegated to disposable, isolated teams (**Gents**: a CEO loop
 driving CrewAI workers). Every model call passes through one gateway that
-classifies it and routes it to a local model or to Claude Opus 5.5, falling back
-to local when the cloud fails. Gents learn; Kent curates what they learn into a
+classifies it and routes it to one of five tiers: the local model answering directly,
+or thinking first (two budgets), or a cloud model (Claude Opus 5.5 as frontier,
+DeepSeek V4.1 Flash as cheap; Kent only), falling back to local when a tier fails. Gents learn; Kent curates what they learn into a
 shared template, so every new Gent starts smarter.
 
 > **v0.1.0 is a release candidate of a reference implementation, not a certified
@@ -38,9 +39,10 @@ Operator ── `kent` command (as themselves; kent-operators group)
               │  model "auto"
               ▼
    LiteLLM gateway 127.0.0.1:4000 ── identity auth (kent_gateway.py), every call logged
-      router (local) ─► fast (local llama.cpp) │ smart / frontier (Claude Opus 5.5)
+      local llama.cpp: fast (no thinking) · default (thinks ≤2K) · smart (thinks ≤4K)
+      cloud, Kent only: cheap (DeepSeek V4.1 Flash) · frontier (Claude Opus 5.5)
               │                                 └─ on failure → local fast
-              ▲ local tiers only
+              ▲ local tiers only (fast, default, smart)
    Gent containers (gent-<id>: own user, key, DB; read-only rootfs; internal network)
       └─ web: SearXNG + read-only fetch via Squid   └─ escalations → Kent → frontier
 
@@ -52,8 +54,8 @@ Operator ── `kent` command (as themselves; kent-operators group)
 |---|---|---|
 | LiteLLM gateway | 1.100.1 | `litellm` |
 | Local model | llama.cpp `llama-server` (Qwen3.6-35B-A3B on the reference machine), on demand: `kent llama start` | `kent-llama` |
-| Frontier / smart | Claude Opus 5.5 (`claude-opus-5-5`) | via gateway |
-| Agent harness | Hermes Agent v0.21.5 (tag v2026.9.24, commit-pinned, own install) | `kent` |
+| Cloud tiers (Kent only) | frontier: Claude Opus 5.5 (`claude-opus-5-5`); cheap: DeepSeek V4.1 Flash (placeholder, nothing routes to it yet) | via gateway |
+| Agent harness | Hermes Agent v0.21.7 (commit-pinned, own install) | `kent` |
 | Web search | SearXNG 2026.7.7 (digest-pinned container) | container, no capabilities |
 | Gent runtime | CrewAI 1.15.22, Python 3.12 image (digest-pinned) | `gent-<id>` |
 | Metrics / logs | Prometheus 3.15.0, node_exporter 1.12.1, Loki 3.7.8, Alloy 1.20.0 | own accounts |
@@ -72,7 +74,7 @@ Operator ── `kent` command (as themselves; kent-operators group)
 - **Controls with evidence:** a control matrix mapped to ISO 27001, SOC 2,
   NIST 800-53, HIPAA and PCI DSS requirement areas ([`controls.md`](docs/controls.md)).
 - **Formal validation:** installation, operational and performance qualification
-  (IQ/OQ/PQ) evidence: 149-check conformance run, 444 automated tests plus 24 in-container checks, end-to-end
+  (IQ/OQ/PQ) evidence: 163-check conformance run, 602 automated tests (552 unit, 50 live) plus 24 in-container checks, end-to-end
   simulation, and verified rollback to the pre-install state.
 - **Reversible by construction:** every module records what it creates; uninstall
   removes exactly that.
@@ -95,7 +97,8 @@ Working with Kent needs no sudo and no `su`: you hand Kent a project with
 `kent new ./my-project`, follow it with `kent gents`, and collect the result with
 `kent gent export <id> ./out` (files arrive owned by you).
 
-Add Claude later: `sudo ./kent-admin set-anthropic-key`, then `sudo ./kent-admin config prod`.
+Add cloud keys later: `sudo ./kent-admin set-anthropic-key` (frontier) and, optionally,
+`sudo ./kent-admin set-deepseek-key` (cheap), then `sudo ./kent-admin config prod`.
 
 Model files: in the lab profile they stay yours (Kent only removes their write bits); the
 hardened profile makes them `root:kent-models` 0440 and restores them on uninstall. Either way
@@ -145,8 +148,8 @@ tests/                unit, live, Gent isolation, simulation oracle, conformance
 ## Status
 
 **v0.1.0 release candidate.** All components installed and verified on the
-reference machine (RTX 2060 SUPER 8 GB, 64 GB RAM). Pending: an Anthropic key for
-live Opus calls, and the gaps listed in [`controls.md`](docs/controls.md) and
+reference machine (RTX 2060 SUPER 8 GB, 64 GB RAM). Pending: Anthropic and DeepSeek
+keys for live cloud calls (until then a simulation oracle stands in), and the gaps listed in [`controls.md`](docs/controls.md) and
 [`conformance.md`](docs/conformance.md) §5. Short-term work is in [`TODO.md`](TODO.md).
 
 ## License

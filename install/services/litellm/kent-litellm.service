@@ -16,12 +16,13 @@ Type=simple
 User=litellm
 Group=litellm
 ExecStart=/opt/kent-litellm/libexec/kent-litellm-start
-# One key per identity (see kent_gateway.POLICY) + the upstream Anthropic key.
+# One key per identity (see kent_gateway.POLICY) + the upstream cloud keys (empty until set).
 LoadCredential=operator_key:/etc/kent/litellm/credentials/operator_key
 LoadCredential=kent_key:/etc/kent/litellm/credentials/kent_key
 LoadCredential=gent_key:/etc/kent/litellm/credentials/gent_key
 LoadCredential=metrics_key:/etc/kent/litellm/credentials/metrics_key
 LoadCredential=anthropic_api_key:/etc/kent/litellm/credentials/anthropic_api_key
+LoadCredential=deepseek_api_key:/etc/kent/litellm/credentials/deepseek_api_key
 
 # State (and LiteLLM's runtime UI copy, via LITELLM_NON_ROOT) in /var/lib/litellm.
 StateDirectory=litellm

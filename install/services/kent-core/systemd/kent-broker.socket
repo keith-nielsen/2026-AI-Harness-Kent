@@ -1,0 +1,13 @@
+[Unit]
+Description=Kent: broker socket for Kent's own tools (reached from inside Hermes's sandbox)
+
+[Socket]
+ListenStream=/run/kent-broker.sock
+SocketUser=kent
+SocketGroup=kent
+SocketMode=0600
+Accept=yes
+MaxConnections=16
+
+[Install]
+WantedBy=sockets.target
