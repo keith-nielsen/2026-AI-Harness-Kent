@@ -1,5 +1,271 @@
 # Resume card — Kent harness
 
+## CLASSIFIER REDESIGN PLAN (2026-10-17; operator-directed; NOTHING BUILT YET)
+
+Replaces the LiteLLM complexity router (classifier sees only its own short prompt, picks fast=off / smart=8192) with
+a three-band thinking triage on the local model. Evidence is in the blocks below (BUDGET CURVE 115, CACHE REUSE,
+TRIAGE POLICY SIMULATION, JEV /v1/decision): on our probes `auto` as deployed was -7.1 pt vs always-2048 at +31 s/item;
+4096 = 8192 on hard probes at -23% time; easy probes gain nothing from thinking (off 98.6% vs 2048 97.7%, 3x faster).
+
+**Decision rule (operator):**
+1. Low-water mark — prompt is easy at VERY high certainty -> thinking off. Strict: a false "easy" costs a correct
+   answer (hard probes: off 41% vs 2048 65%).
+2. High-water mark — prompt is hard at "mostly certain" -> thinking 4096 (not 8192). Loose: a false "hard" costs
+   only time.
+3. Everything else -> default thinking 2048.
+No classifier clears either bar yet, so until one is calibrated everything takes the 2048 default.
+
+**Mechanics (confirmed / open):**
+- CONFIRMED (cachecheck-10171059): triage = the real conversation + one extra user message with the triage question,
+  1 token, logprobs, thinking off, pinned slot (id_slot). The real request then restores the checkpoint at the end of
+  the conversation: 5-7 prompt tokens, ~0.4 s; triage adds ~0.5-0.7 s over a plain request.
+- Signal v1: probability from the triage token's logprobs (no server patch). Never a thinking classifier: thinking
+  costs more than triage can save (max saving ~11 s/easy item) and destroys the probability as a confidence score.
+- Where: a pre-call step in kent_gateway.py (LiteLLM hook): triage call -> thresholds -> forward the real request
+  with off / 2048 / 4096 to the same slot. Configs gain the bands; the complexity router is retired for this path.
+- OPEN: slot affinity under load (2 slots); triage on Gent traffic vs Kent only; the 4096 tier timeout.
+
+**Labels and data:**
+- Labels per prompt from the serving model's own outcomes (not difficulty): easy-safe = passes every repeat with
+  thinking off; hard = 4096 pass rate > 2048.
+- Categorisation: difficulty is the axis, not skill area. Designed level predicts not-easy-safe at AUROC 0.84 and
+  holds within every category (0.76-0.93); T/H/I/R carry signal but are a format shortcut risk (TrustNLP 2026).
+  Keep T/H/I/R only as a balance check; evaluate holding out whole categories/templates.
+- Data: the 115 bench probes (labelled now) + a sample of real Kent/Gent requests (needed: probes are our guess at
+  the traffic mix, never checked). Arena-Hard criteria (steps/variables, constraints, computation...) as a rubric.
+- Size: certifying a false-easy rate of 5% (delta 10%) needs 45-184 prompts routed to easy in the calibration set
+  (0-5 violations); 2% needs 114-462. We cannot certify yet.
+
+**Calibration:** easy threshold by risk control (Clopper-Pearson / conformal: false-easy rate <= alpha with prob
+1-delta, ACL 2026 SRW); hard threshold by utility (P(4K helps) x value vs extra time). Recalibrate on live data;
+guarantees assume calibration data looks like future traffic.
+
+**Signal roadmap (in order):** (1) logprob triage, prompt tuned on labelled data; (2) nearest-neighbour lookup over
+labelled examples (grows with live labels); (3) linear probe on the model's own pre-generation hidden state
+(best published signal; needs a llama-server patch: --embeddings restricts the server to embedding-only).
+The parallel-decision /v1/decision endpoint is parked for triage (blocks chat while running, no context caching,
+0.53 AUROC as built).
+
+**Shadow mode (operator):** when the queue is idle, use the cached prompt for a background run to label the decision:
+easy-safe -> also run 2048 and compare; default -> also run 4096 and compare. Requirements: start only with an empty
+queue and a free slot; cancel when real work arrives (verify that client disconnect cancels the task); run on the
+same slot after the real answer (that divergence point is UNTESTED). Also shadow a small random share of ALL
+decisions with its sampling probability recorded, otherwise calibration data is biased toward the thresholds.
+Comparing answers is not grading: keep raw outputs; judge by agreement, a judge model, or downstream signals.
+
+**Telemetry (append-only rows, durable store not rotating logs):** request id, prompt/conversation hash, caller,
+classifier distribution, threshold version, decision, queue depth + free slots, served mode, prompt/cached tokens,
+prefill/decode ms, thinking tokens, finish, output; shadow: reason (threshold rule / random + probability), mode,
+same timings, output, cancelled; outcome: comparison method + result, later signals by request id.
+
+**Judging tiers (future):** third-party cloud models may be labelled "cheap" and "pricy". Cheap tier = live spot
+checks of fast/smart (random sample + triggers); pricy/frontier = occasional offline deep audits, mainly of the cheap
+judge's error rate, never live (cost, capacity). Any cloud audit (incl. Anthropic batch mode) requires deep cleaning
+of confidential content first, which makes audit quality depend on local-model accuracy. Conflicts with standing
+decisions to settle first: cloud = Claude Opus 5.5 only; Gents local-only (a gateway-side judge would send Gent
+content off the box). The sim-routed oracle can stand in for a cheap tier while testing.
+
+**Idea for later (operator, do not design yet): intelligence bifurcation by need.** On bigger hardware (e.g. a
+Gorgon Halo), daytime = fast/responsive but capable model (35B class); overnight = switch to a comprehensive,
+higher-reasoning, slower model (300B class) for audits/deep work. Keep general capabilities for now.
+
+**TASKS to reach live testing (none started; order = dependencies; each lists needs and its test):**
+1. Label builder — script: bench runs -> one row per prompt (easy-safe, 4K-helps, pass/time per budget, cat, level,
+   template). No GPU. Test: reproduces the BUDGET CURVE 115 numbers.
+2. Threshold tool — easy threshold by Clopper-Pearson (alpha, delta), hard by utility; writes a versioned threshold
+   file. No GPU. Test: unit tests incl. the 45/77/105/184 sample-size table.
+3. Triage prompt tuning — logprob triage variants on the 115, cross-validated by held-out category/template;
+   report AUROC + false-easy at the chosen threshold. GPU (~minutes per variant; kent-llama stopped or idle).
+4. GPU mechanics tests — (a) shadow divergence after the real answer reuses the checkpoint; (b) client disconnect
+   cancels a running request; (c) behaviour with both slots busy (triage + real + shadow). GPU, scratch server.
+5. Gateway pre-call step in kent_gateway.py — triage call, thresholds, forward with off/2048/4096 + id_slot;
+   feature flag; any triage error/timeout -> 2048 default. Test: unit tests + scratch gateway with stub upstream
+   (as tierexp), then the real local model.
+6. Config + conformance — tiers/params for off/2048/4096 (4096 timeout), retire the complexity router for this
+   path, conformance checks, architecture.md version bump. Install needs the operator's sudo dialog.
+7. Telemetry store (DECIDED 2026-10-17, see TELEMETRY STORAGE below) — writer in kent_gateway.py hooks, Kent
+   identity only. Test: unit tests (dedup round-trip rebuilds the exact request; write failure never fails a call;
+   90-day purge); one capture day to measure size.
+8. Shadow runner — idle detection (/slots or /metrics), threshold-rule + random-sample policy with recorded
+   probability, cancel on new work, results into telemetry. Needs 4 and 7. Test: scratch run under synthetic load.
+9. Real-traffic export — `kent-admin` command exporting captured Kent calls (operator only) for labelling.
+10. Pre-live check — bench campaign through the new gateway path vs always-2048 (pass, time) before enabling live;
+    then live with telemetry + shadow on.
+Operator decisions (2026-10-17): Kent traffic only for now (Gents later); captured content kept 90 days; only the
+operator may read it.
+
+**TELEMETRY STORAGE (decided 2026-10-17):** capture at the gateway (only place with the exact model request; Hermes
+sessions in /var/lib/kent/hermes are the conversation, not the request). Today the gateway logs metadata only
+(journald -> Loki, no content, no DB); LiteLLM's logging payload already carries messages/response/model_parameters
+(litellm/types/utils.py:3258-3272; tools location to verify). What: exact request (messages, tools, sampling/thinking,
+slot), full response (content, reasoning, tool calls, finish), triage distribution + threshold version + decision +
+queue state, server timings (prompt/cached tokens, prefill/decode ms), Hermes session/turn link, shadow + outcome rows.
+Identity kent ONLY (operator's personal Hermes also uses the gateway: excluded; Gents excluded). Where:
+/var/lib/litellm/telemetry/kent.sqlite (StateDirectory, litellm-owned, 0750); never Loki. When: pre-call hook
+(request + triage) and success/failure hooks (response + timings), via an in-memory queue + background writer;
+write failure is logged, never fails the call. How: SQLite WAL + schema version; content-addressed, compressed
+blobs (each message / system prompt / tool list stored once; a call = ordered hash list + its response) because
+every call resends the full history (up to ~11K tokens of system + tools on the probes). Retention 90 days
+(daily purge of calls + orphaned blobs). Access: operator only, through a kent-admin export command. Size: unmeasured.
+
+## OVERNIGHT 2026-10-16 (operator asleep from ~04:00; NO sudo dialogs until they are back)
+
+**THINKING RESULTS (think-v1-1016, 08:21; report: bench/runs/think-v1-1016/think-report.md):** 42 probes x 3 reps,
+production server settings (v0.6.0, MTP2 p0, q8/q4, 128k, 2 slots). Pass: off 52/126 (41.3%), 2048 82/126 (65.1%),
+8192 94/126 (74.6%). Paired: off->2048 +23.8 pt, off->8192 +33.3 pt (p<0.001), 2048->8192 +9.5 pt (5 vs 17
+discordant, McNemar p 0.017). Gains are in H (10->23->28 /36) and I (6->21->26 /36); R and T ~flat. 46/126 hit the
+2048 budget, 11/126 the 8192 one; 0 think leaks. Time/item: mean 27 / 73 / 136 s, p90 27 / 119 / 356 s; thinking
+decodes ~20 tok/s (thinking sampling lowers MTP acceptance); i50 took 823 s and 663 s (one call) at 8192. Off arm vs
+baseline 61/126: -7.1 pt, p 0.093 (not significant; seeds don't reproduce, see run note 2).
+**DECIDED 08:40 (operator's "set from results"):** smart budget 8192 in all 4 configs; smart timeout/stream_timeout
+1200 s (router's 600 s would cut the long ones; verified in scratch: per-deployment timeout 3 s -> fast fallback at
+3.3 s, 8 s -> smart answer at 5.3 s, router 1800 ignored); Gent crew client timeout 900 -> 1500 s (above the
+gateway's, so a timeout returns the fast fallback). Real smart call through a scratch gateway to :8080: caller
+max_tokens 300 -> 4936 tokens, finish stop, right answer, 144 s for a one-line time subtraction. That call was
+model "smart" DIRECT (router bypassed). Through auto (real classifier on :8080, tiers stubbed, prod config) the same
+question went to fast 5/5 (router call 308 prompt / 12 completion tokens, 0.5 s warm, 2.8 s cold). The router
+returns a tier name only ({"tier": ...}); budget is fixed per tier, a cap not an allocation.
+
+**CACHE REUSE AFTER TRIAGE CONFIRMED (2026-10-17 11:03, runs/cachecheck-10171059, tests/bench/cachecheck.py):** prod
+binary + args on :8081 (-lv 4, --slot-save-path for slot erase), slot 0 pinned. 6 probes (87-10,988 prompt tokens) x
+real request thinking off/on: triage = conversation + extra user message (1 token, logprobs), then the real request
+-> 12/12 restored the context checkpoint at the end of the conversation (n_past = conversation length; checkpoint
+71-85 MiB); real request processed 5-7 prompt tokens in 0.37-0.45 s vs cold 1.2-23.6 s. Triage cost over a plain
+cold request: +0.5-0.7 s. GPU left free (kent-llama inactive).
+
+**UPDATE 07:10 — easy probes now 3 reps at off/2048 (think-easy2-1017 done 07:07; analysis
+bench/runs/think-easy2-1017/sim115.md):** easy 73: off 98.6% (median 5 s) vs 2048 97.7% (median 16 s); paired
+5 vs 3, p 0.73 -> thinking adds nothing on easy probes and triples their time. All 115: off 77.7%/19 s, 1024
+83.8%/41, 2048 85.8%/50, 4096 88.1%/65, 8192 87.2%/70. Perfect easy/hard split: easy->off + hard->2048 86.4%/36 s;
+easy->off + hard->4096 89.8%/47 s (computed from the table) vs always-2048 85.8%/50 s. Ceilings (perfect classifier):
+A 91.0%/54, A' (1024 + pick 4096) 92.2%/46, B 91.6%/44, oracle 93.9%/34. "Easy" here = every model passed it
+thinking off in earlier runs, i.e. a perfect easy classifier by construction; real classifiers are near chance.
+End state 07:08: bench off, kent-llama INACTIVE (left free for PPE), GPU 337 MiB. Cron b2c945f5 deleted.
+
+**BUDGET CURVE, 115 PROBES (overnight 2026-10-17, done 06:01; analysis bench/runs/think-v1x-1017/sim115.md, scratchpad
+nvclf/sim115.py):** runs think-easy-1017 (73 easy x off/2048/8192), think-1024-1017 + think-4096-1017 (115 x 1),
+think-v1x-1017 (42 hard x 1024/4096 x 2 more reps) + think-v1-1016 -> hard 42 x 3 reps and easy 73 x 1 rep at every budget.
+| budget | all 115 | s/item | hard 42 | hard s | easy 73 | easy median s |
+| off | 76.8% | 21 | 41.3% | 27 | 97.3% | 5 |   | 1024 | 83.8% | 41 | 65.1% | 54 | 94.5% | 17 |
+| 2048 | 87.2% | 45 | 65.1% | 73 | 100% | 11 |   | 4096 | 88.1% | 65 | 74.6% | 105 | 95.9% | 14 |
+| 8192 | 87.2% | 70 | 74.6% | 136 | 94.5% | 9 |
+Hard probes, paired: off->2048 6 vs 36 (p<0.001); 1024 = 2048 (13/13); 2048->4096 8 vs 20 (p 0.036); 4096 = 8192
+(10/10) -> 4096 gets all of 8192's gain at -23% time. Easy probes: no budget differs significantly (all p >= 0.125;
+1024's 4 easy fails are ordinary mistakes, not budget cut-offs). Perfect-classifier ceilings: A (2048 default, pick
+8192) 91.6%/52 s; A' (1024 default, pick 4096) 92.2%/46 s; B (8192 default, pick off) 91.6%/45 s; full oracle 93.9%/34 s.
+Easy/hard split only (perfect): easy->off + hard->2048 85.5%/38 s; easy->off + hard->8192 89.0%/61 s.
+Queued 06:05: think-easy2-1017 = 73 easy x off/2048 x 2 more reps (DEADLINE 07:50, FINAL_OFF=1, kent-llama stays stopped).
+
+**OVERNIGHT 2026-10-17 (queued 01:32; operator: complete as much as possible; PPE needs GPU in the morning):**
+smoke think-smoke-1017 OK (tier is `full`, not `v2`; off = 0 reasoning chars, 8192 reasons, no leaks). Then
+kent-bench-think-easy = `campaign.sh think-easy-1017 kv-q8q4 probes full 1` ONLY=the 73 non-v1 probes (= ceiling
+items prune.py dropped: every model passed them, thinking off) THINKS="off 2048 8192" KEEP_BENCH=1; then
+kent-bench-think-1024 = `campaign.sh think-1024-1017 ... probes full 1` THINKS=1024 (all 115) FINAL_OFF=1. Both
+DEADLINE 08:30. End state wanted: bench off, kent-llama STOPPED (GPU free for PPE). Hourly session cron b2c945f5 at :13.
+Purpose: cost of default thinking on easy questions (path A 2048 default vs path B off-for-easy) + 1024 point.
+
+**TRIAGE POLICY SIMULATION (2026-10-16 ~17:30, no GPU; scratchpad nvclf/policy_sim.py on think-v1-1016, 42 probes x 3):**
+per-item pass/seconds at off/2048/8192 replayed under policies. always off 41.3%/27 s, always 2048 65.1%/73 s, always
+8192 74.6%/136 s, perfect triage (oracle) 78.6%/79 s. auto as deployed (router fast->off, smart->8192) 57.9%/105 s =
+-7.1 pt vs always 2048 [95% CI -19.0, +4.8] at +31 s/item. No scorer (logprob, decision, router) beats always-2048 at
+equal time; under a time budget a RANDOM scorer (50 seeds: 54.3% at 71 s) beats them all: scorers find hard items,
+but hard items are the expensive ones (top-12 by logprob: 332 s each at 8192, off 8%->58%; bottom-12: 50 s, 58%->89%).
+Difficulty != benefit per second. Caveat: 42 agent probes, wide CIs; untested budgets 1024/4096.
+
+**JEV /v1/decision ON PROD MODEL + GPU (2026-10-16 16:24-17:05, runs/pdcuda-10161624, tests/bench/pdcuda.py):**
+build v0.6.0-pd/build-cuda (prod flags) + NEW patch 0005 (draft/MTP context gets no decision seqs). Needs `-fit off`
+(fit probe aborts: GGML_ASSERT n_outputs_max; not fixed). --decision-seqs 8 = CUDA OOM (MTP compute buffer 336 MiB);
+4 works, VRAM 7.1-7.2 GB vs 6.3-6.4 GB without. Gate 1 PASS (base=prod binary vs pd0 vs pd4: identical tokens, logprob
+diff 0.0). Gate 2: 1 token of 512 differs (prompt 2, token 58, logprob diff 3e-5 = near-tie flip from batch mix).
+Decisions on 42 probes: 0 errors, repeat identical 42/42. Speed = prefill: <1K tok median 1.7 s, 1-4K 3.1 s, >4K 8.1 s;
+scoring ~390 ms flat; only the 305-token instructions are cached (context re-read every call). Decisions run as one
+task in the main loop and PAUSE both chat slots for their whole duration (server-context.cpp:2786): 8x64-token
+completions took 1698 s with 207 back-to-back decisions vs ~18 s alone. Accuracy (thinking needed vs off AUC):
+decision P(thinking) 0.53, effort 0.53 (never picked 8192/max; max_tokens always 1K) vs logprob 0.74 on the same server.
+Verdict as built: slower than logprob on long prompts, no better accuracy, blocks chat while it runs. GPU freed for
+PPE at 17:06 (kent llama stop; kent-llama INACTIVE; boost=1).
+
+**LOGPROB TRIAGE TEST (2026-10-16 ~13:30; approximates /v1/decision on prod v0.6.0, no new build):** prod server
+returns top_logprobs. Two independent 1-token questions per probe (effort 0-3; reply length 0-3), thinking off,
+temp 0, probe's full system prompt + messages + tool names; prompts written once, NOT tuned on the probes.
+Digit mass 0.998-1.0. AUC needs-thinking vs off: P(think)=1-p0 0.70 (LLM router 0.66, NVIDIA 0.55); 8192 vs 2048
+E[effort] 0.59 (router 0.58). P(think)>=0.1: 14/19 caught, 6/15 off over-sent (threshold picked on same data =
+optimistic). Length field untestable (only t50 answers >1K). 1.9 s median per question, 8.1 s max (4-6.5K-token
+system prompts; instructions placed first defeats prefix cache). Files: scratchpad/nvclf/logprob_triage.py, lp.jsonl.
+
+**NVIDIA CLASSIFIER TEST (2026-10-16 ~12:40):** nvidia/prompt-task-and-complexity-classifier (DeBERTa-v3-base 0.2B,
+NVIDIA Open Model License) downloaded to DATA/models/nvidia-prompt-task-and-complexity-classifier (weights 0444; +
+base-config/ for offline load). CPU (~/ai-env torch, CUDA hidden): ~0.09 s per short prompt. Tokenizer warning is
+spurious (pieces == spm.model on 3 strings). On the 42 probes' current ask (<=512 tok): AUC needs-thinking vs off =
+reasoning 0.55, complexity 0.51 (chance 0.50); 8192 vs 2048 0.50 / 0.58. LLM router on same split: 0.66 / 0.58.
+=> off-the-shelf it does NOT separate our classes; not adopted. Scripts: scratchpad/nvclf/{nvclf,probe_scores}.py.
+
+**ROUTER PROFILE (2026-10-16 ~10:00, scratch gateway, prod config, real router on :8080, tiers stubbed):** 42 v1
+probes x 3 through auto (probe's own system prompt + tools), vs each probe's ideal = cheapest of off/2048/8192
+passing >=2/3 in think-v1-1016. 126 decisions, all routing_cause llm_classifier, 0 errors, mean 2.2 s.
+ideal off (15 items): fast 36 / smart 6 / frontier 3. ideal 2048 (13): fast 23 / smart 15 / frontier 1.
+ideal 8192 (6): fast 8 / smart 10. none pass locally (8): fast 9 / smart 13 / frontier 2.
+=> needs-thinking items sent to fast 31/57 (54%); router cannot even split off vs thinking reliably, so a
+2K-vs-8K split is not supported by this classifier as configured. Files: scratchpad/tierexp/route_profile.py,
+route_compare.py, profile.jsonl, route-compare.md. Train question via auto, real model: fast 3/3, 1.0-1.8 s.
+
+Operator decisions (04:00): (1) sleep now: no password overnight; (2) Gents MAY use the local thinking `smart`
+tier, with an installer guard that refuses any config where smart is not local while Gents can reach it;
+(3) thinking budget: measure first (probes thinking off vs 2K vs 8K), set smart's budget from the results.
+Goal (operator): full-stack test as production will run: fast = local non-thinking, smart = local thinking,
+frontier = oracle answered live by Claude (stands in for Opus); compare quality.
+Tonight, no password: (A) thinking-mode probe run direct to the model (bench harness, launched via submit.sh,
+items interleaved off/2K/8K so partial results stay paired). (B) build + test in scratch, NOT installed: gateway
+tiers (fast enable_thinking false; smart thinking + budget + Qwen thinking sampling), Gent policy + guard,
+bench mode using the routed flavour, oracle supervision. Morning: ONE batched sudo (gateway install + bench tools
+refresh), then the full-stack run (S2 kent + S3 crews through `auto`) with Claude answering the oracle.
+**(A) DONE 08:21 (exit 0, 126/126 per arm, bench off, kent-llama back on :8080):** unit kent-bench-think-v1 = `campaign.sh think-v1-1016 kv-q8q4 probes v1 3` with
+THINKS="off 2048 8192" KV_CTX=131072 DEADLINE=08:30 FINAL_OFF=1 FINAL_LLAMA=1 (bench off + kent-llama start at end).
+Runs: bench/runs/think-v1-1016/probes-kv-q8q4-think{off,2048,8192}. Smoke passed 04:05 (think-smoke-1016: order,
+reasoning present, no leak, bodies: max_tokens+budget, thinking sampling). Off arm = repeat of kv-quality
+probes-kv-q8q4 (regraded 61/126) at the same build/ctx -> reproducibility check. Host: SMT on (baseline: bench profile).
+New code (untracked bench files): run.py --think, campaign.sh THINKS/DEADLINE, submit.sh forwards THINKS.
+**(B) findings so far (scratch gateway, tierexp):** LiteLLM 1.100.1 forwards litellm_params.extra_body
+(chat_template_kwargs, thinking_budget_tokens, top_k, min_p); sampling placed IN extra_body overrides the
+caller's (temperature 1.0 enforced vs Gent's 0.3); caller max_tokens is not raised -> plan: kent_gateway
+async_pre_call_deployment_hook adds thinking_budget_tokens to max_tokens (runs after auto picks the tier).
+Gent runtime (templates/app/gent/router.py) escalates smart AND frontier to Kent -> must run smart locally.
+**(B) BUILT + TESTED in the repo by ~04:20, NOT installed (all uncommitted):**
+- configs (dev, prod, sim, sim-routed): router/fast extra_body enable_thinking false; smart = local model,
+  extra_body enable_thinking true, thinking_budget_tokens 8192 (set 08:40 from think-v1-1016), Qwen thinking
+  sampling (temp 1.0, top_p 0.95, top_k 20, min_p 0, presence 1.5). Frontier unchanged (prod Opus, sim* oracle).
+- kent_gateway.py: thinking_max_tokens (budget added to caller max_tokens, deployment hook, after auto routing);
+  POLICY gent += smart; LOCAL_MODEL_API_BASES; gent_upstream_refusal raises GentUpstreamRefused for any Gent call
+  not landing on 127.0.0.1:8080/v1 (verified in scratch gateway: refused + never reached; allowed when local).
+- install.sh (litellm): GENTCHECK heredoc refuses a config with a Gent tier/fallback off the local server (tested:
+  4 real configs pass, 4 bad variants refused); self-test now gent->frontier 403 (was smart).
+- Gent runtime: router.triage -> fast|think|escalate (needs_escalation kept); main.py tier smart on think,
+  tasks.yaml think:true, or any retry; task_done event carries tier. crew.build_crew(tier=).
+- conformance.py check_tiers (smart local+thinking+budget, router/fast thinking off, Gent reach all local).
+- bench: benchmode.sh reads /opt/kent-bench/gateway (dev|sim-routed); install-bench-tools.sh --gateway X.
+- tests/sim/oracle_next.py: waits for the next unanswered oracle request, prints it (tested vs scratch oracle).
+- docs: architecture 3.2.11 (changelog says install pending), SOUL tiers text, dev-notes, services README, conformance.md.
+- Tests (08:50): unit 543 (gwtest venv; smart-timeout assert added), bench 359, live 48 (dropped the stale gent->smart 403 case).
+**MORNING (operator present): ONE askpass dialog, in this order:**
+  `sudo -A bash -c 'cd ~administrator/Documents/repo/harness-kent && install/services/litellm/install.sh &&
+   install/services/gent/install.sh && install/services/hermes/install.sh && tests/bench/install-bench-tools.sh
+   --gateway sim-routed && ./kent-admin conformance'` (litellm keeps flavour sim-routed; gent rebuilds the image
+  with the new triage; hermes copies the new SOUL; bench root copy refreshed). Budget set + tests/live run (done 08:50).
+  Caveat: bench mode restores Kent's GOLDEN state (10-01), which has the OLD SOUL tier text; left as is for
+  comparability (re-baselining = `kent-bench golden`, real sudo, operator's call).
+  Full-stack run after: start the oracle (python3 tests/sim/oracle.py --port 4010 &), campaign suites "kent crews"
+  via submit.sh, Claude answers the queue with oracle_next.py in the background (one at a time; data only).
+**Run notes (04:22):** (1) run.py refused resumes when harness_code_hash changed, and tonight's repo edits changed
+it -> the off arm's rep 2 would have exited "different setup". Fixed 04:21 (NOT_COMPARED_BY_SUITE: probes skip
+harness_code_hash; tested: old off manifest resumes, a bench_hash change still refuses); applies from the next block.
+(2) Off arm rep 1 = 16/42 vs baseline reps 21/19/21 (baseline regraded with current graders in a COPY:
+scratchpad/baseline-regraded, 61/126; original untouched). Same requests (42/42 identical incl. seeds) and the exact
+same server command line, yet only 4/42 replies identical: seeds do NOT reproduce outputs (2 slots + MTP batching
+change the numerics; sampled replies diverge). Treat reps as independent samples; judge on all 3 reps.
+(3) Real sim-routed config verified end to end in a scratch LiteLLM (stub upstream + scratch oracle): classifier
+thinking off; auto->smart thinking with max_tokens+2048; fast plain; Gent smart allowed when local; frontier via
+oracle. Report tool: tests/bench/think_report.py RUN_DIR --baseline DIR.
+
 ## OUTSTANDING WORK — read first (updated 2026-10-16 ~01:00, after reboot)
 
 **2026-10-16 status: conformance 149 PASS / 0 FAIL** (bench/runs/hermes-v0217-rollforward/conf-0217-fixed.log).
