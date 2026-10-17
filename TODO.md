@@ -8,7 +8,7 @@ assessment history and open items: [`docs/conformance.md`](docs/conformance.md).
 ## To v0.1.0
 
 - [ ] Anthropic key: `--config prod`, `FALLBACK_TIMEOUT=120`, re-run conformance and one tiny Gent simulation with live Opus
-- [ ] Merge the release branch and tag `v0.1.0` (merged and tagged v0.1.0-rc.6 on 2026-10-02; final after the key test)
+- [ ] Merge the release branch and tag `v0.1.0` (merged and tagged v0.1.0-rc.7 on 2026-10-18, PR #2; final after the key test)
 - [ ] Bug: every interactive `kent chat` leaks a `dbus-daemon` + `gnome-keyring-daemon` pair running as
       `kent` (found 2026-10-02: four pairs from 2026-09-30, parented to the operator's terminal scope).
       Likely Hermes touching the keyring and D-Bus autolaunch; fix in `kent-exec` (no session bus for
