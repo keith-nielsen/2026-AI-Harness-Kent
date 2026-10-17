@@ -21,8 +21,9 @@ def main() -> int:
         calls = kentlib.loki_instant(c, 'sum by (identity, model_group) (count_over_time({unit="kent-litellm.service", kent_event="llm_call"} | json [24h]))')
         out += section("Gateway calls (24h) by identity / requested model",
                        [f"- {r['metric'].get('identity','?')} → {r['metric'].get('model_group','?')}: {r['value'][1]}" for r in calls])
-        tiers = kentlib.loki_instant(c, 'sum by (routed_tier) (count_over_time({unit="kent-litellm.service", kent_event="llm_call"} | json | routed_tier != "" [24h]))')
-        out += section("Router decisions (24h)", [f"- {r['metric'].get('routed_tier')}: {r['value'][1]}" for r in tiers])
+        # the tier that served each auto call (routed_model, 3.3.0); older lines only have the label
+        tiers = kentlib.loki_instant(c, 'sum by (served) (count_over_time({unit="kent-litellm.service", kent_event="llm_call"} | json | routed_tier != "" | label_format served=`{{ if .routed_model }}{{ .routed_model }}{{ else }}{{ .routed_tier }}{{ end }}` [24h]))')
+        out += section("Router decisions (24h)", [f"- {r['metric'].get('served')}: {r['value'][1]}" for r in tiers])
         den = kentlib.loki_instant(c, 'sum by (identity, reason) (count_over_time({unit="kent-litellm.service", kent_event="access_denied"} | json [24h]))')
         out += section("Access denials (24h)", [f"- {r['metric'].get('identity','(no key)')}: {r['metric'].get('reason')} ×{r['value'][1]}" for r in den])
     except Exception as e:  # noqa: BLE001

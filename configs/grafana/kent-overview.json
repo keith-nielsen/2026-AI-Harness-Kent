@@ -83,12 +83,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (routed_tier) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | routed_tier != \"\" [1h]))",
+          "expr": "sum by (served) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | routed_tier != \"\" | label_format served=`{{ if .routed_model }}{{ .routed_model }}{{ else }}{{ .routed_tier }}{{ end }}` [1h]))",
           "datasource": {
             "type": "loki",
             "uid": "kent-loki"
           },
-          "legendFormat": "{{routed_tier}}"
+          "legendFormat": "{{served}}"
         }
       ]
     },

@@ -118,7 +118,7 @@
             "type": "loki",
             "uid": "kent-loki"
           },
-          "expr": "sum by (identity, tier) (count_over_time({kent_event=\"llm_call\"} | json | model_group!=\"\" | label_format tier=`{{ if .routed_tier }}{{ .routed_tier }}{{ else }}{{ .model_group }}{{ end }}` [$__auto]))",
+          "expr": "sum by (identity, tier) (count_over_time({kent_event=\"llm_call\"} | json | model_group!=\"\" | label_format tier=`{{ if .routed_model }}{{ .routed_model }}{{ else if .routed_tier }}{{ .routed_tier }}{{ else }}{{ .model_group }}{{ end }}` [$__auto]))",
           "legendFormat": "{{identity}} {{tier}}"
         }
       ],

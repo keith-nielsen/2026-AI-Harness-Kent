@@ -1,6 +1,6 @@
 """Live adversarial harness: a scratch LiteLLM gateway (real kent_gateway + rendered
-dev config) whose smart/frontier tiers point at a canary server. Any canary hit
-from a restricted identity is a policy bypass.
+dev config) whose thinking tiers (default, smart) and cloud tiers (cheap, frontier) point
+at a canary server. Any canary hit from a restricted identity is a policy bypass.
 
 Run with:  LITELLM_BIN=<venv>/bin/litellm python -m pytest tests/live
 Requires the local llama.cpp server on 127.0.0.1:8080 (router/fast tiers).
@@ -61,7 +61,7 @@ def env(tmp_path_factory):
                     str(d / "config.yaml")], check=True)
     cfg = yaml.safe_load((d / "config.yaml").read_text())
     for m in cfg["model_list"]:
-        if m["model_name"] in ("smart", "frontier"):
+        if m["model_name"] in ("default", "smart", "cheap", "frontier"):
             m["litellm_params"] = {"model": "openai/canary", "api_base": f"http://127.0.0.1:{CANARY_PORT}/v1",
                                    "api_key": "sk-canary"}
     (d / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))

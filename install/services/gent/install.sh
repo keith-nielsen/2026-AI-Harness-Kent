@@ -7,7 +7,7 @@
 #            172.30.0.0/24, host side 172.30.0.1 on bridge kent-gent0
 #   egress   kent-squid.service  own Squid instance, account kent-squid:kent-squid,
 #            127.0.0.1:3129, GET/HEAD + CONNECT:443 to public addresses only
-#            (the vendor squid.service is neither used nor modified)
+#            (the vendor squid.service is not used; switched off when Kent installed the package)
 #   bridges  kent-gent-egress.socket   172.30.0.1:3129 -> 127.0.0.1:3129 (proxy)
 #            kent-gent-gateway.socket  172.30.0.1:4000 -> 127.0.0.1:4000 (LiteLLM)
 #            kent-gent-search.socket   172.30.0.1:8888 -> 127.0.0.1:8888 (SearXNG, JSON search)
@@ -53,6 +53,14 @@ need '[[ -d /etc/kent/litellm ]]' "litellm module not installed"
 need '[[ -s /etc/kent/gitea/credentials/admin_password ]]' "gitea module not installed"
 need '[[ -f /etc/systemd/system/kent-searxng.service ]]' "searxng module not installed"
 [[ -x /usr/sbin/squid ]] || ensure_package squid
+# Installing the squid package also enables and starts the vendor squid.service (an unfiltered
+# proxy on *:3128). Kent needs only the binary, so when Kent installed the package that service is
+# switched off (the package's upgrades leave a disabled unit off); a pre-existing squid is the operator's.
+if manifest_has package squid; then
+    unit_off squid.service
+    # Squid's slow shutdown can outlast systemd's stop timeout and leave the unit marked failed.
+    run systemctl reset-failed squid.service 2>/dev/null || true
+fi
 [[ -x /usr/lib/systemd/systemd-socket-proxyd ]] || die "systemd-socket-proxyd missing"
 # Only the loopback listener matters (the bridge socket on 172.30.0.1:3129 is ours).
 if ss -ltnH 'src 127.0.0.1:3129' | grep -q . && ! systemctl is-active --quiet kent-squid 2>/dev/null \

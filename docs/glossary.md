@@ -9,8 +9,8 @@
 | **Profile** | `lab` (development: Kent has a general shell as the kent account) or `hardened` (restricted toolsets and deny rules). Set in `/etc/kent/profile`; switched with `sudo ./kent-admin profile`. |
 | **Managed scope** | Hermes' administrator-owned config layer (`HERMES_MANAGED_DIR`, here `/etc/kent/hermes/managed`), merged over Kent's own config; Kent cannot change it. |
 | **Gateway** | The LiteLLM proxy at `127.0.0.1:4000`. Every model call goes through it; it authenticates identities (`kent_gateway.py`), classifies `auto` requests and routes them to a tier. |
-| **Tier** | Logical model name: `router` (classifies), `fast` (local, routine), `smart` and `frontier` (Claude Opus 5.5 in prod), `auto` (router decides). |
-| **Router** | The classification step behind `auto` (LiteLLM complexity router on the local model): fast, smart or frontier; unclassifiable requests go to frontier. |
+| **Tier** | Logical model name: `router` (classifies), `fast` (local, thinking off), `default` and `smart` (local, thinking up to 2048 / 4096 tokens), `cheap` (DeepSeek V4.1 Flash; reserved) and `frontier` (Claude Opus 5.5), the cloud tiers, Kent only; `auto` (router decides). |
+| **Router** | The classification step behind `auto` (LiteLLM complexity router on the local model). Interim mapping (3.3.0): default, or frontier when classified up; a failed or unclassifiable request goes to default. |
 | **Fallback** | When a cloud tier fails or exceeds `FALLBACK_TIMEOUT`, the gateway answers from the local `fast` tier. |
 | **Identity** | Who a gateway key belongs to: `operator`, `kent`, `gent`, `gent-<id>`, `metrics`. Determines which tiers and routes it may use. |
 | **Escalation** | A Gent asking Kent for help it can't get locally: written to its `shared_learnings`, answered by Kent on frontier into the Gent's inbox, then the task resumes. Budget: 5 per Gent per 24 h. |

@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS routing_log (
     timestamp TEXT NOT NULL,
     task_hash TEXT NOT NULL,                -- SHA-256 of task text (no PII in log)
     task_preview TEXT,                      -- first 200 chars, redacted
-    routed_tier TEXT NOT NULL,              -- fast, smart, frontier
+    routed_tier TEXT NOT NULL,              -- fast, default, smart, cheap, frontier
     confidence REAL NOT NULL,
     review_required INTEGER NOT NULL,
     escalation_reason TEXT,

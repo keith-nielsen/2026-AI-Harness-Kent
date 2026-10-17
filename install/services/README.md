@@ -55,6 +55,8 @@ Grafana use SQLite.
   `fetch_verified` downloads through the installer's cache `/var/cache/kent-install` (root-only;
   a cached file is checked against the same pinned hash); vendor `.deb` packages (grafana, alloy)
   go through `ensure_pinned_deb`, which installs the verified file without adding an apt source.
+  Grafana uses only the plugins bundled in that package: `kent.conf` turns off its plugin
+  downloads, updates and web installs, and the installer empties `/var/lib/grafana/plugins`.
   pip and uv use the same cache for Python packages. `KENT_NO_CACHE=1` (`install.sh --no-cache`)
   bypasses it. The cache belongs to the installer, not a module: a plain uninstall keeps it,
   `uninstall.sh --purge` removes it, and `sudo rm -rf /var/cache/kent-install` reclaims the space
@@ -84,15 +86,16 @@ All model traffic goes through the gateway. `kent_gateway.py` maps each key to a
 
 | Identity | Models | Routes |
 |---|---|---|
-| `operator`, `kent` | all (router, fast, smart, frontier, auto) | all |
-| `gent` and each `gent-<id>` | router, fast, smart (local model only; checked per call) | chat/completions, models; deny-by-default request shape |
+| `operator`, `kent` | all (router, fast, default, smart, cheap, frontier, auto) | all |
+| `gent` and each `gent-<id>` | router, fast, default, smart (local model only; checked per call) | chat/completions, models; deny-by-default request shape |
 | `metrics` | none | `/metrics/` |
 
 Per-Gent keys live in `/etc/kent/litellm/gent-keys/<id>.key` and are picked up without a
 restart. Configs: `configs/litellm_config.dev.yaml` (all local), `configs/litellm_config.yaml`
-(prod: frontier → Claude Opus 5.5), `configs/litellm_config.sim.yaml` (simulation only:
-frontier → the oracle fixture in `tests/sim/oracle.py`); smart is the local model thinking in all of them, `configs/litellm_config.sim-routed.yaml`
-(prod routing with the oracle in place of Anthropic).
+(prod: frontier → Claude Opus 5.5, cheap → DeepSeek V4.1 Flash), `configs/litellm_config.sim.yaml`
+(simulation only: cheap and frontier → the oracle fixture in `tests/sim/oracle.py`),
+`configs/litellm_config.sim-routed.yaml` (prod routing with the oracle in place of both cloud
+providers). In all of them default and smart are the local model thinking (budgets 2048 and 4096).
 
 **FALLBACK_TIMEOUT** (`/etc/kent/litellm/litellm.env`, set with `litellm/install.sh
 --set-fallback-timeout N`): how long a cloud call may take before falling back to local.

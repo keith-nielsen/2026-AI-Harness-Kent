@@ -91,7 +91,7 @@ Expected:
 401
 {"error":{"message":"invalid key","type":"auth_error","param":"None","code":"401"}}
 401
-auto,fast,frontier,router,smart
+auto,cheap,default,fast,frontier,router,smart
 ```
 
 Restricted identity (the `gent` test key; reading it needs root):
@@ -101,11 +101,12 @@ GK=$(sudo cat /etc/kent/litellm/credentials/gent_key)
 c() { curl -s -o /dev/null -w '%{http_code} ' -H "Authorization: Bearer $GK" -H 'Content-Type: application/json' "$@"; }
 c $GW/chat/completions -d '{"model":"fast","max_tokens":3,"messages":[{"role":"user","content":"hi"}]}'
 c $GW/chat/completions -d '{"model":"frontier","max_tokens":3,"messages":[{"role":"user","content":"hi"}]}'
+c $GW/chat/completions -d '{"model":"cheap","max_tokens":3,"messages":[{"role":"user","content":"hi"}]}'
 c "$GW/chat/completions?model=frontier" -d '{"model":"fast","max_tokens":3,"messages":[{"role":"user","content":"hi"}]}'
 c $GW/chat/completions -d '{"model":"fast","api_base":"http://evil","messages":[{"role":"user","content":"hi"}]}'
 c http://127.0.0.1:4000/key/generate -d '{}'; echo; unset GK
 ```
-Expected: `200 403 403 403 403` (local tier allowed; cloud tier, query-string model, extra fields and admin routes refused).
+Expected: `200 403 403 403 403 403` (local tier allowed; both cloud tiers, query-string model, extra fields and admin routes refused).
 
 ---
 
@@ -126,14 +127,15 @@ Look up the routing decisions in Loki (allow ~10 s for shipping):
 ```bash
 curl -sG $LOKI/query_range --data-urlencode 'query={unit="kent-litellm.service", kent_event="llm_call"} | json | model_group="auto"' \
   --data-urlencode "start=$(loki_since '5 min')" --data-urlencode limit=10 \
-  | jq -r '.data.result[].values[][1]' | jq -c '{identity,routed_tier,routing_cause,model,latency_s,call_id}'
+  | jq -r '.data.result[].values[][1]' | jq -c '{identity,routed_tier,routed_model,routing_cause,model,latency_s,call_id}'
 ```
 Expected (one line per request; ids match the ones printed above):
 ```
-{"identity":"kent","routed_tier":"fast","routing_cause":"llm_classifier","model":"openai/locally-run-model","latency_s":0.578,"call_id":"chatcmpl-…"}
-{"identity":"kent","routed_tier":"frontier","routing_cause":"llm_classifier","model":"openai/locally-run-model","latency_s":0.897,"call_id":"chatcmpl-…"}
+{"identity":"kent","routed_tier":"fast","routed_model":"default","routing_cause":"llm_classifier","model":"openai/locally-run-model","latency_s":0.578,"call_id":"chatcmpl-…"}
+{"identity":"kent","routed_tier":"frontier","routed_model":"frontier","routing_cause":"llm_classifier","model":"openai/locally-run-model","latency_s":0.897,"call_id":"chatcmpl-…"}
 ```
-In `prod`, the frontier line shows `anthropic/claude-opus-5-5`.
+In `prod`, the frontier line shows `anthropic/claude-opus-5-5`. `routed_tier` is the classifier's
+label, `routed_model` the tier that served the call (3.3.0: label fast → default).
 
 Injection resistance (repeatable probe, 32 requests):
 
@@ -141,6 +143,8 @@ Injection resistance (repeatable probe, 32 requests):
 python3 tests/live/router_probe.py --repeat 2
 ```
 Expected: `easy {'fast': 8}` · `hard` only smart/frontier · `inject_down(hard)` only smart/frontier · `inject_up(easy) {'fast': 8}`.
+The probe reports the classifier's labels (`routed_tier`); since 3.3.0 the labels fast and smart are both
+served by the default tier (`routed_model`).
 
 **Fallback (prod only, with an Anthropic key):** temporarily set a very short timeout, ask frontier, restore.
 
@@ -166,7 +170,7 @@ ask() { kent -q "$1"; }
 
 | # | Prompt | Expected answer (substance) |
 |---|---|---|
-| K1 | `Who are you? Answer in exactly three short bullet points: your name, what you manage, and how you reach language models.` | Identifies as **Kent** (Hermes-based estate manager, not a cloud chatbot); manages **Gents** and the estate; reaches models **through the gateway at localhost:4000**, which classifies requests into fast/smart/frontier (Claude Opus) with fallback |
+| K1 | `Who are you? Answer in exactly three short bullet points: your name, what you manage, and how you reach language models.` | Identifies as **Kent** (Hermes-based estate manager, not a cloud chatbot); manages **Gents** and the estate; reaches models **through the gateway at localhost:4000**, which picks a tier (3.3.0: fast, default, smart local; cheap, frontier cloud) with fallback |
 | K2 | ``Run `kent-gent list` and tell me, in one sentence, how many Gents exist and what state they are in.`` | A count and states matching the real `kent gents` output (Kent actually runs the command) |
 | K3 | ``Run `kent-audit verify` and report the result in one line.`` | `Audit chain valid: N entries` matching `kent audit` |
 | K5 | `Which Unix account do you run as, and can you use docker directly?` | The **kent** account; no direct Docker access, Gent containers only through the root brokers |
@@ -349,8 +353,9 @@ curl -sG $LOKI/labels | jq -c .data
 #    expect: kent, gent-<id>; an empty identity = the router's own classification calls
 lq 'sum by (identity) (count_over_time({unit="kent-litellm.service", kent_event="llm_call"} | json [1h]))'
 
-# L3 router decisions, last 24 h (expect counts for fast / smart / frontier)
-lq 'sum by (routed_tier) (count_over_time({unit="kent-litellm.service", kent_event="llm_call"} | json | routed_tier != "" [24h]))'
+# L3 router decisions by serving tier, last 24 h (3.3.0: expect default and frontier;
+#    lines from before 3.3.0 have no routed_model and count under their label)
+lq 'sum by (served) (count_over_time({unit="kent-litellm.service", kent_event="llm_call"} | json | routed_tier != "" | label_format served=`{{ if .routed_model }}{{ .routed_model }}{{ else }}{{ .routed_tier }}{{ end }}` [24h]))'
 
 # L4 denials by identity and reason, last 24 h
 #    expect e.g. gent "model not permitted", "route not permitted", "query string not permitted";

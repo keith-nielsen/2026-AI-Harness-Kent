@@ -27,7 +27,7 @@ def limits() -> dict:
 
 
 def llm(api_key: str, tier: str = "fast", max_tokens: int | None = None) -> LLM:
-    # timeout above the gateway's for smart (1200 s), so a smart call that runs out of time
+    # timeout above the gateway's for the thinking tiers (900 s), so a call that runs out of time
     # comes back as the gateway's fallback answer from fast instead of a client timeout
     mt = min(int(max_tokens or limits()["max_tokens"]), MAX_TOKENS_CAP)
     return LLM(model=tier, provider="openai", base_url=GATEWAY_URL, api_key=api_key,

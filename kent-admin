@@ -2,15 +2,16 @@
 # =============================================================================
 # Kent — kent-admin (run from a checkout of the repository)
 #
-#   sudo ./kent-admin status                  profile, gateway config, Anthropic key, services
+#   sudo ./kent-admin status                  profile, gateway config, cloud keys, services
 #   sudo ./kent-admin profile lab|hardened    switch Kent's Hermes policy (re-renders its managed
 #                                             config; takes effect at Kent's next start) and the
 #                                             model files' mode (lab: left as yours; hardened:
 #                                             root:kent-models 0440), re-recording their hashes
 #   sudo ./kent-admin config dev|prod         gateway routing: dev = every tier on the local model;
-#                                             prod = smart/frontier on Claude (needs the key)
+#                                             prod = frontier on Claude (needs the key), cheap on DeepSeek
 #   sudo ./kent-admin set-anthropic-key       store the Anthropic key for the gateway (prompted,
 #                                             hidden; kept in /etc/kent/litellm/credentials, root 0600)
+#   sudo ./kent-admin set-deepseek-key        the same for the DeepSeek key (cheap tier; optional)
 #   sudo ./kent-admin llama set KEY=VALUE     local model server setting (MODEL_SET, CTX, UB, NCMOE,
 #                                             THINK, ALIAS, PIN, CORES); operators then run
 #                                             `kent llama restart`
@@ -44,6 +45,7 @@ case "$cmd" in
         echo "profile        $(cat /etc/kent/profile 2>/dev/null || echo '?')"
         echo "gateway        $(current_config)"
         echo "anthropic key  $(key_set && echo set || echo 'not set')"
+        echo "deepseek key   $([[ -s /etc/kent/litellm/credentials/deepseek_api_key ]] && echo set || echo 'not set')"
         echo "operators      $(getent group kent-operators | cut -d: -f4 | tr ',' ' ')"
         echo "services:"
         for u in kent-litellm kent-prometheus kent-node-exporter kent-loki alloy grafana-server kent-gitea \
@@ -66,13 +68,16 @@ case "$cmd" in
     config)
         c="${1:-}"; [[ "$c" == dev || "$c" == prod ]] || { echo "usage: kent-admin config dev|prod" >&2; exit 2; }
         if [[ "$c" == prod ]] && ! key_set; then
-            echo "prod routes smart/frontier to Claude; set the key first: sudo ./kent-admin set-anthropic-key" >&2; exit 1
+            echo "prod routes frontier to Claude; set the key first: sudo ./kent-admin set-anthropic-key" >&2; exit 1
         fi
         "$SVC/litellm/install.sh" --config "$c"
         ;;
     set-anthropic-key)
         "$SVC/litellm/install.sh" --set-anthropic-key
-        [[ "$(current_config)" == prod ]] || echo "The gateway is on dev; to route smart/frontier to Claude: sudo ./kent-admin config prod"
+        [[ "$(current_config)" == prod ]] || echo "The gateway is on dev; to route frontier to Claude: sudo ./kent-admin config prod"
+        ;;
+    set-deepseek-key)
+        "$SVC/litellm/install.sh" --set-deepseek-key
         ;;
     llama)
         [[ "${1:-}" == set && -n "${2:-}" ]] || { echo "usage: kent-admin llama set KEY=VALUE" >&2; exit 2; }

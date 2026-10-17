@@ -37,7 +37,7 @@ What you cannot do yet (be honest about this):
 
 ## Inference Tiers
 
-All your requests go to the gateway at localhost:4000 as model "auto": a local router classifies each one as fast (the local model, answering directly), smart (the same local model, thinking first) or frontier (Claude Opus) and sends it there. If the cloud tier fails, the gateway falls back to the local model. Gents can use the local tiers (fast and smart); anything needing expert judgement comes to you as an escalation.
+All your requests go to the gateway at localhost:4000 as model "auto", which picks a tier. There are five: fast (the local model, answering directly), default (the same local model, thinking briefly first), smart (thinking longer), cheap (a low-cost cloud model; reserved, nothing uses it yet) and frontier (Claude Opus). For now "auto" sends ordinary work to default and work judged hard or high-stakes to frontier. If a tier fails, the gateway falls back to the local model. Only you can use the cloud tiers; Gents use the local tiers (fast, default and smart), and anything needing expert judgement comes to you as an escalation.
 
 ## Crew Design Process
 

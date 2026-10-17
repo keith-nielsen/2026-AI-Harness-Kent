@@ -7,9 +7,10 @@
 #     answers, learnings judgements, Gent assessments, QA audits) goes to the
 #     ORACLE fixture (tests/sim/oracle.py, 127.0.0.1:4010), where a human or
 #     Claude Code session answers each queued request as the Opus stand-in.
-#     "smart" is the local model thinking, as in production.
+#     "cheap" (DeepSeek V4.1 Flash in prod) also goes to the oracle, as model
+#     oracle-cheap. "default" and "smart" are the local model thinking, as in production.
 #   - "auto" still classifies every request (the decision is logged), but in the
-#     simulation all three auto tiers are served locally, so Kent's interactive
+#     simulation every auto decision is served locally (default), so Kent's interactive
 #     agent loop (large tool-calling requests) is not sent to the oracle.
 #   - Oracle calls get a long timeout (answers are written by hand); on timeout or
 #     oracle failure the usual fallback to the local fast tier applies.
@@ -41,14 +42,16 @@ model_list:
               Hard or high-stakes work: open-ended design and architecture,
               subtle debugging, novel problems, long multi-part reasoning, or
               anything where a wrong answer is costly.
+        # SIM: classified, but served locally (see header), on the default tier as in prod.
         tiers:
-          fast: "fast"
-          # SIM: classified, but served locally (see header)
-          smart: "fast"
-          frontier: "fast"
-        # Unclassifiable or failed classification goes to the most capable
-        # tier ("when in doubt, escalate").
-        fallback_tier: "frontier"
+          fast: "default"
+          smart: "default"
+          frontier: "default"
+        # Unclassifiable or failed classification (e.g. the classifier's 15 s timeout while both
+        # model slots are busy) goes to the default tier, not the cloud: a timed-out classifier
+        # sent a one-line sum to frontier in the 2026-10-17 scratch test. ("fast" is the
+        # classifier's label; tiers above maps it to the default model.)
+        fallback_tier: "fast"
 
   # --- T0 Router (local; shares the llama.cpp server until a dedicated router model runs) ---
   - model_name: "router"
@@ -76,15 +79,38 @@ model_list:
       extra_body:
         chat_template_kwargs: {enable_thinking: false}
 
-  # --- T2 Smart (local, thinking) ---
+  # --- T2 Default (local, thinking 2048) ---
   # The same local model with thinking turned on per request: no second model, no extra VRAM.
   # Values in extra_body override the caller's (Qwen's thinking-mode sampling); kent_gateway
   # adds thinking_budget_tokens to the caller's max_tokens, since reasoning counts against it.
-  # Gents may call this tier; kent_gateway checks that every Gent call lands on the local
-  # model server. Budget 8192 from the think-v1-1016 probe run (2026-10-16): 74.6% of 126
-  # passed, against 65.1% at 2048 (McNemar p 0.017) and 41.3% with thinking off. Thinking
-  # decodes at ~20 tok/s, slower in long answers, so a call that thinks to the budget
-  # can take 10-14 min: smart has its own timeout, longer than the router's 600 s.
+  # Gents may call the thinking tiers; kent_gateway checks that every Gent call lands on the
+  # local model server. Default is where requests go unless a classifier is sure: on the 115
+  # bench probes (2026-10-17) thinking 2048 passed 85.8% at 50 s/item, thinking off 77.7% at
+  # 19 s (no classifier yet separates the prompts that are safe without thinking).
+  - model_name: "default"
+    litellm_params:
+      model: "openai/locally-run-model"
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: "sk-no-key-required"
+      # llama.cpp rejects OpenAI params it doesn't implement (e.g. Hermes sends
+      # reasoning_effort); drop them for local deployments only.
+      drop_params: true
+      # Seconds before a default call gives up and falls back to fast (the longest probe
+      # answer at this budget took 430 s; 2026-10-17 budget-curve runs).
+      timeout: 900
+      stream_timeout: 900
+      extra_body:
+        chat_template_kwargs: {enable_thinking: true}
+        thinking_budget_tokens: 2048
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+
+  # --- T3 Smart (local, thinking 4096) ---
+  # As default with a larger budget: on the 42 hard probes 4096 passed 74.6% vs 65.1% at
+  # 2048 (8 vs 20 discordant, p 0.036) and equalled 8192 at 23% less time (2026-10-17).
   - model_name: "smart"
     litellm_params:
       model: "openai/locally-run-model"
@@ -94,19 +120,31 @@ model_list:
       # reasoning_effort); drop them for local deployments only.
       drop_params: true
       # Seconds before a smart call gives up and falls back to fast (the longest probe
-      # answer at this budget took 823 s with the server otherwise idle).
-      timeout: 1200
-      stream_timeout: 1200
+      # answer at this budget took 604 s; 2026-10-17 budget-curve runs).
+      timeout: 900
+      stream_timeout: 900
       extra_body:
         chat_template_kwargs: {enable_thinking: true}
-        thinking_budget_tokens: 8192
+        thinking_budget_tokens: 4096
         temperature: 1.0
         top_p: 0.95
         top_k: 20
         min_p: 0.0
         presence_penalty: 1.5
 
-  # --- T3 Frontier (SIM: oracle) ---
+  # --- T4 Cheap (SIM: oracle; stands in for DeepSeek V4.1 Flash, Kent only) ---
+  - model_name: "cheap"
+    litellm_params:
+      model: "openai/oracle-cheap"
+      api_base: "http://127.0.0.1:4010/v1"
+      api_key: "sk-oracle-sim"
+      # Hermes sends reasoning_effort, which the openai/ provider rejects for an
+      # unknown model; without this every call fails at once and falls back to fast.
+      drop_params: true
+      timeout: 1800
+      stream_timeout: 1800
+
+  # --- T5 Frontier (SIM: oracle; Kent only) ---
   - model_name: "frontier"
     litellm_params:
       model: "openai/oracle-opus"
@@ -125,7 +163,9 @@ router_settings:
   # Fallbacks match the model name the caller asked for, so "auto" needs its
   # own entry (otherwise a request routed to a failing tier returns 500).
   fallbacks:
+    - default: ["fast"]
     - smart: ["fast"]
+    - cheap: ["fast"]
     - frontier: ["fast"]
     - auto: ["fast"]
   # Fall back immediately on timeouts and auth/bad-request errors; retry

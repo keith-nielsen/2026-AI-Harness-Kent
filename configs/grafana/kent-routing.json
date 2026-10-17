@@ -33,12 +33,12 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (routed_tier) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | model_group=\"auto\" [$__auto]))",
+     "expr": "sum by (served) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | model_group=\"auto\" | label_format served=`{{ if .routed_model }}{{ .routed_model }}{{ else }}{{ .routed_tier }}{{ end }}` [$__auto]))",
      "datasource": {
       "type": "loki",
       "uid": "kent-loki"
      },
-     "legendFormat": "{{routed_tier}}"
+     "legendFormat": "{{served}}"
     }
    ],
    "fieldConfig": {
@@ -72,12 +72,12 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (routed_tier, status) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | model_group=\"auto\" [$__range]))",
+     "expr": "sum by (served, status) (count_over_time({unit=\"kent-litellm.service\", kent_event=\"llm_call\"} | json | model_group=\"auto\" | label_format served=`{{ if .routed_model }}{{ .routed_model }}{{ else }}{{ .routed_tier }}{{ end }}` [$__range]))",
      "datasource": {
       "type": "loki",
       "uid": "kent-loki"
      },
-     "legendFormat": "{{routed_tier}} {{status}}",
+     "legendFormat": "{{served}} {{status}}",
      "queryType": "instant",
      "instant": true,
      "range": false
@@ -88,7 +88,7 @@
    "id": 3,
    "type": "timeseries",
    "title": "Fallbacks to the local tier",
-   "description": "Each time a smart/frontier call failed and the gateway answered from a fallback model instead.",
+   "description": "Each time a tier call (thinking or cloud) failed and the gateway answered from a fallback model instead.",
    "datasource": {
     "type": "prometheus",
     "uid": "kent-prometheus"
@@ -193,7 +193,7 @@
    "id": 6,
    "type": "timeseries",
    "title": "Prompt tokens by identity",
-   "description": "Input tokens per caller: the cost driver once smart/frontier are a paid model.",
+   "description": "Input tokens per caller: the cost driver once cheap/frontier are paid models.",
    "datasource": {
     "type": "loki",
     "uid": "kent-loki"

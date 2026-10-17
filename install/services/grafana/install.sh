@@ -8,6 +8,9 @@
 #   drop-in   /etc/systemd/system/grafana-server.service.d/kent.conf (127.0.0.1:3001)
 #   provision /etc/grafana/provisioning/{datasources,dashboards}/kent.yaml
 #   kent      /etc/kent/grafana/ (dashboards, root-only admin password)
+#   plugins   only those bundled in the pinned package; downloads and updates are off (kent.conf),
+#             /var/lib/grafana/plugins (Grafana's own downloads) is emptied, and the vendor unit's
+#             bundled_plugins dir /var/lib/grafana/plugins-bundled is refreshed from the package, root-owned
 # For a pre-existing package, /var/lib/grafana is moved aside and restored on uninstall; the
 # unit's prior enabled/active state is restored too.
 # Usage: sudo ./install.sh [--no-start] [--dry-run]
@@ -78,6 +81,22 @@ run install -m 0600 -o "$OPERATOR" -g "$OPERATOR" "$CONF/credentials/admin_passw
 ensure_dir "$DROPIN_DIR" 0755 root root
 place_file dropin "$HERE/kent.conf" "$DROPIN_DIR/kent.conf" 0644 root root
 run systemctl daemon-reload
+
+# Plugins Grafana downloaded itself (before kent.conf turned that off) would override the bundled,
+# pinned copies; nothing of Kent's lives there. The directory itself stays, owned by grafana.
+BUNDLED=/usr/share/grafana/data/plugins-bundled
+if [[ -d /var/lib/grafana/plugins ]] && [[ -n "$(ls -A /var/lib/grafana/plugins)" ]]; then
+    log "removing plugins Grafana downloaded: $(ls /var/lib/grafana/plugins | tr '\n' ' ')"
+    run find /var/lib/grafana/plugins -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+fi
+# The vendor unit loads bundled plugins from /var/lib/grafana/plugins-bundled (its postinst copies
+# them there so the updater can replace them; on this machine it was empty). Copy them from the
+# package again, root-owned so Grafana cannot change them.
+need '[[ -f "$BUNDLED/prometheus/plugin.json" && -f "$BUNDLED/loki/plugin.json" ]]' "package has no bundled prometheus/loki plugins in $BUNDLED"
+run rm -rf /var/lib/grafana/plugins-bundled
+run cp -a "$BUNDLED" /var/lib/grafana/plugins-bundled
+run chown -R root:root /var/lib/grafana/plugins-bundled
+run chmod -R go-w /var/lib/grafana/plugins-bundled
 if [[ "$START" -eq 1 ]]; then
     run systemctl enable "$UNIT"; run systemctl restart "$UNIT"
     # Package installed by Kent → Kent's enablement is undone on uninstall.
@@ -101,14 +120,21 @@ if [[ "$START" -eq 1 && "$DRY_RUN" -eq 0 ]]; then
     api() { curl -s -m 10 -u "admin:${PW}" "http://127.0.0.1:${PORT}$1"; }
     [[ "$(api /api/user | jq -r .login)" == "admin" ]] || die "admin login with the Kent password failed (single attempt; see journalctl -u $UNIT)"
     for ds in kent-prometheus kent-loki; do
-        st=$(api "/api/datasources/uid/$ds/health" | jq -r .status)
-        [[ "$st" == "OK" ]] || die "datasource $ds health: ${st:-no response}"
+        for _ in $(seq 1 15); do
+            st=$(api "/api/datasources/uid/$ds/health" | jq -r .status)
+            [[ "$st" == "OK" ]] && break; sleep 2
+        done
+        [[ "$st" == "OK" ]] || die "datasource $ds health: ${st:-no response} (after 30 s)"
+    done
+    for p in prometheus loki; do
+        want=$(jq -r .info.version "$BUNDLED/$p/plugin.json"); got=$(api "/api/plugins/$p/settings" | jq -r .info.version)
+        [[ "$got" == "$want" ]] || die "plugin $p is $got, not the bundled $want"
     done
     [[ "$(api '/api/search?query=Kent%20overview' | jq length)" -ge 1 ]] || die "Kent overview dashboard not provisioned"
     anon=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/api/datasources")
     [[ "$anon" == "401" ]] || die "anonymous API access not refused (HTTP $anon)"
     unset PW
-    log "OK: grafana $(dpkg-query -W -f='${Version}' grafana) on 127.0.0.1:${PORT}; datasources healthy; dashboard provisioned; anonymous refused"
+    log "OK: grafana $(dpkg-query -W -f='${Version}' grafana) on 127.0.0.1:${PORT}; datasources healthy; bundled plugins only; dashboard provisioned; anonymous refused"
 fi
 audit_event "install completed"
 log "done."

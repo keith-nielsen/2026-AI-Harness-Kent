@@ -40,9 +40,10 @@ INFERENCE_ROUTES = frozenset({
 POLICY: dict[str, dict[str, frozenset[str] | None]] = {
     "operator": {"models": None, "routes": None},
     "kent":     {"models": None, "routes": None},
-    # Local tiers only (smart = the local model thinking); Gents escalate to Kent for anything more.
+    # Local tiers only (default and smart = the local model thinking); the cloud tiers (cheap,
+    # frontier) are Kent's. Gents escalate to Kent for anything more.
     # Every Gent call must also land on the local model server: see gent_upstream_refusal.
-    "gent":     {"models": frozenset({"router", "fast", "smart"}), "routes": INFERENCE_ROUTES},
+    "gent":     {"models": frozenset({"router", "fast", "default", "smart"}), "routes": INFERENCE_ROUTES},
     # Prometheus scrape: no models at all, metrics endpoint only.
     "metrics":  {"models": frozenset(), "routes": frozenset({"/metrics", "/metrics/"})},
 }
@@ -284,7 +285,10 @@ class KentActivityLogger(CustomLogger):
             "status": status,
             "identity": meta.get("user_api_key_alias") or meta.get("user_api_key_user_id"),
             "model_group": slp.get("model_group"),
+            # routed_tier is the classifier's label; routed_model the tier that served it (they differ
+            # where the router maps a label elsewhere, e.g. label fast -> model default in 3.3.0)
             "routed_tier": routing.get("tier"),
+            "routed_model": routing.get("routed_model"),
             "routing_cause": routing.get("cause"),
             "model": slp.get("model"),
             "api_base": slp.get("api_base"),

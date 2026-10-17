@@ -50,26 +50,26 @@ async def test_none_key_rejected(gw):
 
 # --- Full-access identities ----------------------------------------------------
 @pytest.mark.parametrize("identity", ["operator", "kent"])
-@pytest.mark.parametrize("model", ["router", "fast", "smart", "frontier", "auto"])
+@pytest.mark.parametrize("model", ["router", "fast", "default", "smart", "cheap", "frontier", "auto"])
 async def test_full_identities_get_all_models(gw, identity, model):
     r = await auth(gw, KEYS[identity], body={"model": model})
     assert r.models == []  # LiteLLM semantics: [] = all models
 
 
 # --- gent: local tiers only ------------------------------------------------------
-# smart is the local model thinking; that every Gent call really lands on the local model server is
-# checked per call (gent_upstream_refusal, tested below), not by the tier name.
-GENT_MODELS = {"router", "fast", "smart"}
+# default and smart are the local model thinking; that every Gent call really lands on the local model
+# server is checked per call (gent_upstream_refusal, tested below), not by the tier name.
+GENT_MODELS = {"router", "fast", "default", "smart"}
 
 
-@pytest.mark.parametrize("model", ["router", "fast", "smart"])
+@pytest.mark.parametrize("model", ["router", "fast", "default", "smart"])
 async def test_gent_allowed_local_tiers(gw, model):
     r = await auth(gw, KEYS["gent"], body={"model": model})
     assert set(r.models) == GENT_MODELS
 
 
 @pytest.mark.parametrize("model", [
-    "frontier", "auto", "FAST", "Fast", " fast", "fast ", "fast\n",
+    "frontier", "cheap", "auto", "FAST", "Fast", " fast", "fast ", "fast\n",
     "fast,smart", "fast, frontier", "smart,fast", "openai/locally-run-model",
     "anthropic/claude-opus-5-5", "claude-opus-5-5", "*", "", "router/../smart",
 ])
@@ -335,3 +335,16 @@ async def test_pre_call_hook_repairs_and_logs(gw, capsys):
     assert out is data and json.loads(data["messages"][1]["tool_calls"][1]["function"]["arguments"])
     line = [json.loads(l) for l in capsys.readouterr().out.splitlines() if "tool_history_repaired" in l][-1]
     assert line["count"] == 1 and line["model_group"] == "fast"
+
+
+async def test_call_log_records_label_and_serving_tier(gw, capsys):
+    # The classifier's label and the tier that served the call differ under the 3.3.0 mapping (fast -> default).
+    from datetime import datetime, timedelta
+    slo = {"model_group": "auto", "model": "openai/locally-run-model", "api_base": "http://127.0.0.1:8080/v1",
+           "metadata": {"user_api_key_alias": "kent", "routing_decision": {
+               "tier": "fast", "routed_model": "default", "cause": "llm_classifier"}}}
+    t0 = datetime(2026, 10, 17)
+    await gw.activity_logger.async_log_success_event({"standard_logging_object": slo}, None, t0, t0 + timedelta(seconds=2))
+    line = [json.loads(l) for l in capsys.readouterr().out.splitlines() if '"llm_call"' in l][-1]
+    assert (line["routed_tier"], line["routed_model"], line["routing_cause"]) == ("fast", "default", "llm_classifier")
+    assert line["identity"] == "kent" and line["latency_s"] == 2.0

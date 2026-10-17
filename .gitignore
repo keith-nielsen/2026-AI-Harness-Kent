@@ -67,3 +67,6 @@ docker-compose.override.yml
 tests/bench/suites/
 tests/bench/fixtures/
 tests/bench/runs/
+# Grader self-tests that spell out correct and targeted-wrong replies (answer keys)
+tests/bench/test_probes_t2_gold.py
+tests/bench/test_s2s3_graders.py

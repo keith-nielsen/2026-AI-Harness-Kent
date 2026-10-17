@@ -15,8 +15,8 @@
 #
 #   --profile lab       (default) development: Kent keeps a general shell as the kent account
 #   --profile hardened  deployment: restricted Kent tools and policies (docs/design, §7)
-#   --config dev        (default) all tiers on the local model;  prod: smart/frontier on Claude
-#                       (add the key later: sudo ./kent-admin set-anthropic-key)
+#   --config dev        (default) all tiers on the local model;  prod: frontier on Claude, cheap
+#                       on DeepSeek (add keys later: sudo ./kent-admin set-anthropic-key, set-deepseek-key)
 #   --no-cache          download everything again and leave the download cache untouched
 # Re-running without --profile/--config keeps the installed choices; every module is idempotent.
 #
