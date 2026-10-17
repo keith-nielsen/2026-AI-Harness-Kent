@@ -26,9 +26,9 @@ design *with these amendments*; `architecture.md` itself will be revised to matc
 | Topic | Original design (v2.3) | Decision (operator), now in architecture v3.0.0 |
 |---|---|---|
 | Inference engine | Ollama on a Unix socket | Ollama dropped. Local model = llama.cpp `llama-server` as the on-demand `kent-llama` service on 127.0.0.1:8080 (own account; models root:kent-models 0440 behind a read-only mount, hash-checked at each start; operators start/stop it via polkit) — v0.1.0-rc.4 |
-| Cloud model | DeepSeek + Anthropic | Claude only: smart and frontier → Claude Opus 5.5 (`claude-opus-5-5`) in prod; no DeepSeek |
+| Cloud model | DeepSeek + Anthropic | Claude only: frontier → Claude Opus 5.5 (`claude-opus-5-5`) in prod; no DeepSeek. smart → the local model thinking (3.2.11; was Opus) |
 | Local-first | ~95% local | End-state for later; cloud intelligence does the heavy lifting for now |
-| Tier access | Gent CEO: fast + smart | Gents are **local-only** (router, fast). Anything harder is escalated to Kent |
+| Tier access | Gent CEO: fast + smart | Gents are **local-only**: router, fast and (3.2.11) smart, all the local model, checked per call. Expert judgement is escalated to Kent |
 | Kent's identity | Unix user `kent`, own service | Restored in architecture 3.1.0: Kent is the no-login `kent` account with its own commit-pinned Hermes (`/opt/kent-hermes`); humans use the `kent` command (group `kent-operators`); `~/ai-env` is untouched; an operator may run their personal Hermes on Kent's pinned install with their own home and gateway key. (From rc.1 to rc.2 Kent was a profile of the operator's Hermes, running as the operator.) |
 | Service accounts | Some shared groups (`ollama`, `agentic-logs`) | Every service has its own `user:group`; no shared `kent:kent` |
 | Gateway auth | LiteLLM virtual keys + DB | Single LiteLLM gateway, identity auth in `kent_gateway.py` (operator, kent, gent, gent-<id>, metrics); no PostgreSQL |

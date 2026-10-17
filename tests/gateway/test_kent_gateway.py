@@ -57,14 +57,19 @@ async def test_full_identities_get_all_models(gw, identity, model):
 
 
 # --- gent: local tiers only ------------------------------------------------------
-@pytest.mark.parametrize("model", ["router", "fast"])
+# smart is the local model thinking; that every Gent call really lands on the local model server is
+# checked per call (gent_upstream_refusal, tested below), not by the tier name.
+GENT_MODELS = {"router", "fast", "smart"}
+
+
+@pytest.mark.parametrize("model", ["router", "fast", "smart"])
 async def test_gent_allowed_local_tiers(gw, model):
     r = await auth(gw, KEYS["gent"], body={"model": model})
-    assert set(r.models) == {"router", "fast"}
+    assert set(r.models) == GENT_MODELS
 
 
 @pytest.mark.parametrize("model", [
-    "smart", "frontier", "auto", "FAST", "Fast", " fast", "fast ", "fast\n",
+    "frontier", "auto", "FAST", "Fast", " fast", "fast ", "fast\n",
     "fast,smart", "fast, frontier", "smart,fast", "openai/locally-run-model",
     "anthropic/claude-opus-5-5", "claude-opus-5-5", "*", "", "router/../smart",
 ])
@@ -94,7 +99,7 @@ async def test_gent_duplicate_json_keys_last_wins_is_not_a_bypass(gw):
     await denied(gw, KEYS["gent"], 403, body=raw)
     raw2 = b'{"model": "frontier", "model": "fast"}'
     r = await auth(gw, KEYS["gent"], body=raw2)  # effective model is "fast": allowed
-    assert set(r.models) == {"router", "fast"}
+    assert set(r.models) == GENT_MODELS
 
 
 # Request-body fields that could redirect a permitted call elsewhere (live
@@ -129,7 +134,7 @@ async def test_gent_realistic_crewai_request_allowed(gw):
             "tool_choice": "auto", "response_format": {"type": "json_object"}, "seed": 1, "n": 1,
             "reasoning_effort": "medium", "user": "gent-a3f7c291"}
     r = await auth(gw, KEYS["gent"], body=body)
-    assert set(r.models) == {"router", "fast"}
+    assert set(r.models) == GENT_MODELS
 
 
 async def test_gent_query_string_refused(gw):
@@ -185,7 +190,7 @@ async def test_gent_denied_non_inference_routes(gw, path):
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
 async def test_gent_may_list_models(gw, path):
     r = await auth(gw, KEYS["gent"], path=path, method="GET")
-    assert set(r.models) == {"router", "fast"}
+    assert set(r.models) == GENT_MODELS
 
 
 # --- metrics: scrape only, no models ------------------------------------------------
@@ -213,7 +218,78 @@ def test_no_restricted_identity_gets_empty_model_list(gw):
 
 
 def test_gent_policy_contains_no_cloud_tier(gw):
-    assert gw.POLICY["gent"]["models"] <= {"router", "fast"}
+    assert gw.POLICY["gent"]["models"] <= GENT_MODELS
+
+
+# --- Per-call checks after routing (async_pre_call_deployment_hook) ----------------------
+LOCAL = "http://127.0.0.1:8080/v1"
+THINK = {"chat_template_kwargs": {"enable_thinking": True}, "thinking_budget_tokens": 2048}
+
+
+def deployment(identity, api_base=LOCAL, **kw):
+    return {"model": "openai/locally-run-model", "api_base": api_base,
+            "metadata": {"user_api_key_alias": identity}, **kw}
+
+
+@pytest.mark.parametrize("identity", ["gent", "gent-1a2b3c4d"])
+@pytest.mark.parametrize("api_base", ["http://127.0.0.1:4010/v1", "http://127.0.0.1:9199/v1", "", None,
+                                      "http://127.0.0.1:8080/v1/../../x", "http://127.0.0.1:80801/v1",
+                                      "http://localhost:8080/v1"])
+def test_gent_refused_off_the_local_model_server(gw, identity, api_base):
+    assert gw.gent_upstream_refusal(deployment(identity, api_base))
+
+
+def test_gent_refused_on_a_cloud_deployment(gw):
+    kw = {"model": "anthropic/claude-opus-5-5", "metadata": {"user_api_key_alias": "gent-1a2b3c4d"}}
+    assert gw.gent_upstream_refusal(kw)
+
+
+@pytest.mark.parametrize("api_base", [LOCAL, LOCAL + "/"])
+def test_gent_allowed_on_the_local_model_server(gw, api_base):
+    assert gw.gent_upstream_refusal(deployment("gent-1a2b3c4d", api_base)) is None
+
+
+@pytest.mark.parametrize("identity", ["kent", "operator", None])
+def test_unrestricted_callers_are_not_checked(gw, identity):
+    assert gw.gent_upstream_refusal(deployment(identity, "http://127.0.0.1:4010/v1")) is None
+
+
+async def test_deployment_hook_raises_for_a_gent_off_the_local_server(gw, capsys):
+    with pytest.raises(gw.GentUpstreamRefused):
+        await gw.activity_logger.async_pre_call_deployment_hook(
+            deployment("gent-1a2b3c4d", "http://127.0.0.1:4010/v1", max_tokens=10), None)
+    rec = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rec["kent_event"] == "access_denied" and rec["identity"] == "gent-1a2b3c4d"
+
+
+@pytest.mark.parametrize("given, want", [(1000, 3048), (1, 2049), (None, None), (0, 0)])
+def test_thinking_budget_is_added_to_max_tokens(gw, given, want):
+    kw = {"extra_body": dict(THINK)} | ({"max_tokens": given} if given is not None else {})
+    gw.thinking_max_tokens(kw)
+    assert kw.get("max_tokens") == want
+
+
+def test_thinking_budget_also_raises_max_completion_tokens(gw):
+    kw = {"extra_body": dict(THINK), "max_completion_tokens": 500}
+    assert gw.thinking_max_tokens(kw) == 2048 and kw["max_completion_tokens"] == 2548
+
+
+@pytest.mark.parametrize("extra_body", [None, {}, {"chat_template_kwargs": {"enable_thinking": False},
+                                                   "thinking_budget_tokens": 2048},
+                                        {"thinking_budget_tokens": 2048},
+                                        {"chat_template_kwargs": {"enable_thinking": True}},
+                                        {"chat_template_kwargs": {"enable_thinking": True}, "thinking_budget_tokens": -5},
+                                        {"chat_template_kwargs": {"enable_thinking": True}, "thinking_budget_tokens": True},
+                                        {"chat_template_kwargs": {"enable_thinking": True}, "thinking_budget_tokens": "2048"}])
+def test_non_thinking_deployments_keep_max_tokens(gw, extra_body):
+    kw = {"max_tokens": 1000} | ({"extra_body": extra_body} if extra_body is not None else {})
+    assert gw.thinking_max_tokens(kw) == 0 and kw["max_tokens"] == 1000
+
+
+async def test_deployment_hook_raises_max_tokens_for_kent(gw):
+    out = await gw.activity_logger.async_pre_call_deployment_hook(
+        deployment("kent", extra_body=dict(THINK), max_tokens=100), None)
+    assert out["max_tokens"] == 2148
 
 
 # --- Denials are logged with identity and reason -------------------------------------

@@ -85,13 +85,13 @@ All model traffic goes through the gateway. `kent_gateway.py` maps each key to a
 | Identity | Models | Routes |
 |---|---|---|
 | `operator`, `kent` | all (router, fast, smart, frontier, auto) | all |
-| `gent` and each `gent-<id>` | router, fast (local only) | chat/completions, models; deny-by-default request shape |
+| `gent` and each `gent-<id>` | router, fast, smart (local model only; checked per call) | chat/completions, models; deny-by-default request shape |
 | `metrics` | none | `/metrics/` |
 
 Per-Gent keys live in `/etc/kent/litellm/gent-keys/<id>.key` and are picked up without a
 restart. Configs: `configs/litellm_config.dev.yaml` (all local), `configs/litellm_config.yaml`
-(prod: smart/frontier → Claude Opus 5.5), `configs/litellm_config.sim.yaml` (simulation only:
-smart/frontier → the oracle fixture in `tests/sim/oracle.py`), `configs/litellm_config.sim-routed.yaml`
+(prod: frontier → Claude Opus 5.5), `configs/litellm_config.sim.yaml` (simulation only:
+frontier → the oracle fixture in `tests/sim/oracle.py`); smart is the local model thinking in all of them, `configs/litellm_config.sim-routed.yaml`
 (prod routing with the oracle in place of Anthropic).
 
 **FALLBACK_TIMEOUT** (`/etc/kent/litellm/litellm.env`, set with `litellm/install.sh

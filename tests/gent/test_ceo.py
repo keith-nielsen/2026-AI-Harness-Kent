@@ -36,7 +36,7 @@ def ceo(tmp_path, monkeypatch):
     monkeypatch.setenv("POLL_INTERVAL", "0")
 
     state = {"crew_outputs": [], "verdicts": [], "router": (False, ""), "kickoffs": 0, "raise": None,
-             "descriptions": [], "max_tokens": [], "agent_writes": {}}
+             "descriptions": [], "max_tokens": [], "agent_writes": {}, "tiers": [], "route": None}
 
     class FakeCrew:
         def kickoff(self):
@@ -53,10 +53,13 @@ def ceo(tmp_path, monkeypatch):
         state["on_step"] = on_step
         state["descriptions"].append(a[2])
         state["max_tokens"].append(k.get("max_tokens"))
+        state["tiers"].append(k.get("tier"))
         return FakeCrew()
     crew_mod.build_crew = fake_build
     router_mod = types.ModuleType("gent.router")
     router_mod.needs_escalation = lambda key, d: state["router"]
+    # state["route"] ("fast"|"think"|"escalate", question) overrides; else derived from state["router"]
+    router_mod.triage = lambda key, d: state["route"] or (("escalate" if state["router"][0] else "fast"), state["router"][1])
     monkeypatch.syspath_prepend(str(ROOT / "templates" / "app"))
     for m in ("gent.main", "gent.crew", "gent.router"):
         sys.modules.pop(m, None)
@@ -394,3 +397,20 @@ def test_workers_and_validator_know_todays_date_and_kents_answer(ceo):
     step(main)                                          # b resumed: the validator sees Kent's answer
     system, user = [cu for cu in state["chats"] if "review task results" in cu[0]][-1]
     assert "EXPERT GUIDANCE FROM KENT" in user and "7.2.8 is correct" in user
+
+
+def test_think_route_runs_on_smart(ceo):
+    main, state, data, _ = ceo
+    state["route"] = ("think", "")
+    main.seed(main.db()); step(main)
+    assert tasks(data)["a"]["status"] == "done" and state["tiers"][0] == "smart"
+
+
+def test_fast_route_runs_on_fast_and_a_retry_thinks(ceo):
+    main, state, data, _ = ceo
+    state["verdicts"] = [{"passed": False, "critique": "bad"}, {"passed": True}]
+    main.seed(main.db())
+    step(main)
+    step(main)
+    assert state["tiers"][:2] == ["fast", "smart"]           # rejected once: the retry thinks
+    assert tasks(data)["a"]["status"] == "done"

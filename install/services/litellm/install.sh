@@ -183,6 +183,42 @@ run install -d -m 0755 -o root -g root "${VENV}/lib"
 run install -m 0644 -o root -g root "$HERE/kent_gateway.py" "${VENV}/lib/kent_gateway.py"
 
 # ─── 4. Config ───────────────────────────────────────────────────────────────
+# Gents may call only local tiers: every tier kent_gateway's POLICY grants the gent identity, and
+# every fallback of those tiers, must point at the local model server (kent_gateway also checks
+# each Gent call at run time). Read from the module's source, so POLICY stays the one place.
+log "checking that Gent tiers are local in $(basename "$SRC_CONFIG")"
+"${VENV}/bin/python" - "$SRC_CONFIG" "$HERE/kent_gateway.py" <<'GENTCHECK' || die "SECURITY: $(basename "$SRC_CONFIG") points a Gent tier off the local model server"
+import ast, sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+consts = {}
+for node in ast.parse(open(sys.argv[2]).read()).body:
+    target = getattr(node, "target", None) or (node.targets[0] if isinstance(node, ast.Assign) else None)
+    if isinstance(target, ast.Name) and target.id in ("POLICY", "LOCAL_MODEL_API_BASES"):
+        consts[target.id] = node.value
+def literal_set(call):
+    assert isinstance(call, ast.Call) and call.func.id == "frozenset", "expected frozenset({...})"
+    return set(ast.literal_eval(call.args[0]))
+gent = next(v for k, v in zip(consts["POLICY"].keys, consts["POLICY"].values) if ast.literal_eval(k) == "gent")
+gent_models = literal_set(next(v for k, v in zip(gent.keys, gent.values) if ast.literal_eval(k) == "models"))
+local = {b.rstrip("/") for b in literal_set(consts["LOCAL_MODEL_API_BASES"])}
+fallbacks = {}
+for entry in (cfg.get("router_settings") or {}).get("fallbacks") or []:
+    for k, v in entry.items():
+        fallbacks.setdefault(k, []).extend(v)
+tiers = set(gent_models)
+for t in list(gent_models):
+    tiers.update(fallbacks.get(t, []))
+bad = []
+for m in cfg.get("model_list") or []:
+    if m.get("model_name") in tiers:
+        lp = m.get("litellm_params") or {}
+        if str(lp.get("api_base") or "").rstrip("/") not in local or not str(lp.get("model", "")).startswith("openai/"):
+            bad.append(f"{m['model_name']} -> {lp.get('model')} at {lp.get('api_base') or 'provider default'}")
+missing = tiers - {m.get("model_name") for m in cfg.get("model_list") or []}
+if bad or missing:
+    sys.exit(f"Gent tiers {sorted(tiers)}: not local: {bad}; missing: {sorted(missing)}")
+print(f"  Gent tiers {sorted(tiers)} all on {sorted(local)}")
+GENTCHECK
 # No database: drop any database/master-key settings; auth is kent_gateway's.
 claim_path path "$CONF_DIR"
 ensure_dir "$CONF_DIR" 0750 root "$ACCOUNT"
@@ -264,7 +300,7 @@ if [[ "$START" -eq 1 && "$DRY_RUN" -eq 0 ]]; then
     KENT_KEY="$(cat "${CRED_DIR}/kent_key")"; GENT_KEY="$(cat "${CRED_DIR}/gent_key")"
     NOAUTH=$(code "" GET /v1/models)
     KENT_MODELS=$(code "$KENT_KEY" GET /v1/models)
-    GENT_SMART=$(code "$GENT_KEY" POST /v1/chat/completions smart)
+    GENT_FRONTIER=$(code "$GENT_KEY" POST /v1/chat/completions frontier)
     GENT_ADMIN=$(code "$GENT_KEY" POST /key/generate)
     # Regression (found by tests/live): LiteLLM also takes the model from the
     # query string; a restricted identity must be refused, not routed.
@@ -272,10 +308,10 @@ if [[ "$START" -eq 1 && "$DRY_RUN" -eq 0 ]]; then
     unset KENT_KEY GENT_KEY
     [[ "$NOAUTH" == "401" ]]      || die "gateway served /v1/models without a key (HTTP $NOAUTH)"
     [[ "$KENT_MODELS" == "200" ]] || die "gateway rejected the kent key (HTTP $KENT_MODELS); see: journalctl -u ${UNIT}"
-    [[ "$GENT_SMART" == "403" ]]  || die "SECURITY: gent key was not refused on tier 'smart' (HTTP $GENT_SMART)"
+    [[ "$GENT_FRONTIER" == "403" ]] || die "SECURITY: gent key was not refused on tier 'frontier' (HTTP $GENT_FRONTIER)"
     [[ "$GENT_ADMIN" == "403" ]]  || die "SECURITY: gent key was not refused on an admin route (HTTP $GENT_ADMIN)"
     [[ "$GENT_QUERY" == "403" ]]  || die "SECURITY: gent key with ?model=frontier was not refused (HTTP $GENT_QUERY)"
-    log "OK: ${UNIT} is up; no key 401, kent 200, gent refused on smart, admin routes and query-string model."
+    log "OK: ${UNIT} is up; no key 401, kent 200, gent refused on frontier, admin routes and query-string model."
 
     # Hermes-style request (carries reasoning_effort) against the local tier.
     # Non-fatal: the local llama.cpp server may legitimately be stopped.

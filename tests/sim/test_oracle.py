@@ -41,11 +41,24 @@ def test_sim_routed_routes_like_prod_with_oracle_for_anthropic():
     router = lambda m: m["auto"]["complexity_router_config"]  # noqa: E731
     assert router(sim)["tiers"] == router(prod)["tiers"] == {"fast": "fast", "smart": "smart", "frontier": "frontier"}
     assert router(sim)["fallback_tier"] == router(prod)["fallback_tier"]
-    for tier in ("smart", "frontier"):
-        assert prod[tier]["model"].startswith("anthropic/")
-        assert sim[tier]["model"] == f"openai/oracle-{tier}"
-        assert sim[tier]["api_base"] == "http://127.0.0.1:4010/v1"
-    assert sim["fast"] == prod["fast"] and sim["router"] == prod["router"]
+    assert prod["frontier"]["model"].startswith("anthropic/")
+    assert sim["frontier"]["model"] == "openai/oracle-frontier"
+    assert sim["frontier"]["api_base"] == "http://127.0.0.1:4010/v1"
+    # smart is the local model thinking everywhere: identical in prod and sim-routed
+    assert sim["fast"] == prod["fast"] and sim["router"] == prod["router"] and sim["smart"] == prod["smart"]
+
+
+def test_smart_is_the_local_model_thinking_and_fast_is_not():
+    for name in ("litellm_config.yaml", "litellm_config.dev.yaml", "litellm_config.sim.yaml",
+                 "litellm_config.sim-routed.yaml"):
+        m = _models(name)
+        assert m["smart"]["api_base"] == "http://127.0.0.1:8080/v1", name
+        assert m["smart"]["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True}, name
+        assert m["smart"]["extra_body"]["thinking_budget_tokens"] > 0, name
+        # thinking to the 8192 budget took up to 823 s (think-v1-1016); the router's 600 s would cut it
+        assert m["smart"]["timeout"] == m["smart"]["stream_timeout"] >= 1200, name
+        for tier in ("router", "fast"):
+            assert m[tier]["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}, (name, tier)
 
 
 def test_oracle_tiers_drop_unsupported_params():

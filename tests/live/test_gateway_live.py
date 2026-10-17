@@ -52,7 +52,8 @@ def test_gent_user_field_is_attribution_not_identity(canary):
     assert r.status_code == 403 and canary() == 0
 
 
-@pytest.mark.parametrize("model", ["smart", "frontier", "auto", "fast,smart", "smart,fast"])
+# smart is no longer here: Gents may call it (test_gent_smart_never_leaves_the_local_model_server)
+@pytest.mark.parametrize("model", ["frontier", "auto", "fast,smart", "smart,fast"])
 def test_gent_direct_cloud_models_refused(canary, model):
     r = call(KEYS["gent"], body=chat(model))
     assert r.status_code == 403 and canary() == 0
@@ -93,6 +94,14 @@ def test_gent_alternate_routes_refused(canary, path):
     assert r.status_code in (403, 404) and canary() == 0
 
 
+def test_gent_smart_never_leaves_the_local_model_server(canary):
+    # Gents may call smart (the local model, thinking), but this harness points smart at the canary,
+    # a non-local upstream: the per-call guard (gent_upstream_refusal) must stop it before it is sent.
+    # A fallback to fast (local) may still answer.
+    r = call(KEYS["gent"], body=chat("smart"))
+    assert canary() == 0, f"gent reached a non-local smart deployment (HTTP {r.status_code})"
+
+
 def test_gent_oversized_body_refused_or_handled(canary):
     big = chat("fast"); big["messages"][0]["content"] = "A" * 5_000_000
     r = call(KEYS["gent"], body=big, timeout=120)
@@ -114,7 +123,7 @@ def test_gent_key_in_any_header_is_still_gent(canary, hdr):
     models = call(path="/v1/models", method="GET", headers=hdr(KEYS["gent"]))
     if models.status_code == 200:
         ids = {m["id"] for m in models.json()["data"]}
-        assert ids <= {"router", "fast"}, f"gent saw {ids}"
+        assert ids <= {"router", "fast", "smart"}, f"gent saw {ids}"
     r = call(body=chat("frontier"), headers=hdr(KEYS["gent"]))
     assert r.status_code in (401, 403) and canary() == 0
 

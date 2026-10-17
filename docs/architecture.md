@@ -1,12 +1,30 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.2.10
+version: 3.2.11
 date: 2026-10-16
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.2.11
+    date: 2026-10-16
+    summary: >
+      Tiers: smart is now the local model with thinking on, set per request by the
+      gateway (extra_body: chat_template_kwargs.enable_thinking, thinking_budget_tokens,
+      Qwen's thinking-mode sampling); router and fast send thinking off explicitly.
+      Frontier stays Claude Opus 5.5 (oracle in sim/sim-routed), the only cloud tier.
+      kent_gateway adds the thinking budget to the caller's max_tokens (reasoning counts
+      against it). Gents may now call smart (operator decision); every Gent call is
+      checked after routing and refused unless it lands on the local model server,
+      the installer refuses a config that points a Gent tier or its fallback elsewhere,
+      and conformance checks the installed tiers. Gent triage has three outcomes
+      (fast / think on smart / escalate); a rejected attempt is retried on smart.
+      Bench mode's gateway is chosen when the bench tools are installed (dev or
+      sim-routed). Thinking budget 8192, from the think-v1-1016 probe run (42 probes x 3:
+      74.6% pass, 65.1% at 2048, 41.3% thinking off); smart has its own 1200 s timeout
+      (thinking to the budget took up to 823 s) and the Gent client waits 1500 s. Built
+      and tested 2026-10-16; install pending (operator sudo).
   - version: 3.2.10
     date: 2026-10-16
     summary: >
@@ -207,8 +225,9 @@ supervises the estate and delegates project work to disposable, isolated project
 teams (**Gents**: a CEO loop driving CrewAI workers in a locked-down container).
 Every model call from every entity goes through one gateway, which first asks a
 small local router model how hard the request is and then sends it to the
-matching tier: the local model for routine work, Claude Opus 5.5 for smart and
-frontier work, with automatic fallback to the local model when the cloud fails.
+matching tier: the local model answering directly for routine work, the same local
+model thinking first for reasoning work, Claude Opus 5.5 for frontier work, with
+automatic fallback to the local model when the cloud fails.
 
 Gents only ever use the local model. When they need more, they escalate to Kent,
 who answers on the frontier tier. Gents publish what they learned; Kent judges
@@ -297,7 +316,7 @@ GENT (gent-<id8> — one per project, Docker, own Unix user)
 |---|---|---|---|---|
 | Human (`operator` key) | all | everything | unrestricted | asks Kent (or runs `kent-gent`) |
 | Kent (`kent` key) | router, fast, smart, frontier, auto | kent.db (R/W); every Gent's stack.db (**read-only**) | unrestricted (host process) | Gents |
-| Gent CEO + workers (`gent-<id>` key) | router, fast | own stack.db (R/W) | gateway + egress proxy only | nothing |
+| Gent CEO + workers (`gent-<id>` key) | router, fast, smart (local only) | own stack.db (R/W) | gateway + egress proxy only | nothing |
 | Prometheus (`metrics` key) | none | gateway `/metrics/` only | — | — |
 
 Enforced by `kent_gateway.py` (§3) and by filesystem ownership (§9, §14).
@@ -329,21 +348,38 @@ the ratio moves toward local as local models improve.
 | Logical name | Prod target | Dev / current reference machine | Used for |
 |---|---|---|---|
 | `router` | local llama.cpp model | same local model | classifying each `auto` request |
-| `fast` | local llama.cpp model | Qwen3.6-35B-A3B via `llama-server` on 127.0.0.1:8080 | routine, mechanical work; all Gent work |
-| `smart` | Claude Opus 5.5 | local model (dev config) | ordinary reasoning and coding |
-| `frontier` | Claude Opus 5.5 | local model (dev config) | hard problems, escalations, assessments, QA |
+| `fast` | local llama.cpp model, thinking off | Qwen3.6-35B-A3B via `llama-server` on 127.0.0.1:8080 | routine, mechanical work; Gent tasks by default |
+| `smart` | the same local model, thinking on | same | ordinary reasoning and coding; Gent tasks triaged "think" and Gent retries |
+| `frontier` | Claude Opus 5.5 | local model (dev config); the oracle (sim, sim-routed) | hard problems, escalations, assessments, QA |
 | `auto` | router → fast / smart / frontier | same | the default for Kent and the operator |
 
-smart and frontier point at the same model today; they will be differentiated later.
+smart is fast's model with thinking turned on per request, so it needs no second model and
+no extra VRAM. The gateway sets it in each smart deployment's `extra_body`, which overrides
+the caller: `chat_template_kwargs.enable_thinking: true`, `thinking_budget_tokens` (the
+server stops the reasoning there) and Qwen's thinking-mode sampling (temperature 1.0,
+top_p 0.95, top_k 20, presence_penalty 1.5). llama-server counts reasoning tokens against
+`max_tokens`, so kent_gateway adds the budget to the caller's `max_tokens` after routing
+(`thinking_max_tokens`). router and fast send `enable_thinking: false` explicitly.
+
+The budget is 8192 tokens, chosen by the think-v1-1016 probe run (2026-10-16; 42 probes,
+3 repeats, production server): 94/126 passed at 8192, 82/126 at 2048 (McNemar p 0.017)
+and 52/126 with thinking off. Thinking decodes at about 20 tok/s (Qwen's thinking sampling
+lowers MTP acceptance), so a call that thinks to the budget takes 7-14 minutes; even an easy
+question sent straight to smart can think for a few thousand tokens (a one-line time
+subtraction: 4936 tokens, 144 s; through `auto` the router sent it to fast, 5 of 5). smart therefore has its own `timeout`/`stream_timeout` of 1200 s, above the
+router's 600 s; on timeout it falls back to fast. Gent clients wait 1500 s, so a smart call
+that runs out of time comes back as the fallback answer, not a client timeout.
 
 ### 2.3 Gateway Configurations
 
-| Config | File | smart / frontier go to | Use |
+| Config | File | frontier goes to | Use |
 |---|---|---|---|
 | prod | `configs/litellm_config.yaml` | `anthropic/claude-opus-5-5` | normal operation (needs an Anthropic key) |
 | dev | `configs/litellm_config.dev.yaml` | the local model | local-only testing |
 | sim | `configs/litellm_config.sim.yaml` | the oracle fixture (`tests/sim/oracle.py`) | end-to-end simulations without a key; `auto` serves every tier locally |
-| sim-routed | `configs/litellm_config.sim-routed.yaml` | the oracle fixture, prod routing | try the tiers as they will behave with a key: `auto` sends smart/frontier to the oracle, which can answer with tool calls |
+| sim-routed | `configs/litellm_config.sim-routed.yaml` | the oracle fixture, prod routing | try the tiers as they will behave with a key: `auto` sends frontier to the oracle, which can answer with tool calls |
+
+In every config, router/fast/smart are the local model (smart thinking).
 
 Select with `install/services/litellm/install.sh --config dev|prod|sim`. No
 application code changes: every consumer uses logical names.
@@ -413,8 +449,13 @@ identity and enforces a policy table.
 |---|---|---|---|
 | `operator` | systemd credential `operator_key` | all | all |
 | `kent` | systemd credential `kent_key` | all | all |
-| `gent` | systemd credential `gent_key` (tests) | router, fast | chat/completions, models |
-| `gent-<id>` | `/etc/kent/litellm/gent-keys/<id>.key` (written at spawn, hot-reloaded) | router, fast | chat/completions, models |
+| `gent` | systemd credential `gent_key` (tests) | router, fast, smart | chat/completions, models |
+| `gent-<id>` | `/etc/kent/litellm/gent-keys/<id>.key` (written at spawn, hot-reloaded) | router, fast, smart | chat/completions, models |
+
+A Gent call must also land on the local model server (`LOCAL_MODEL_API_BASES`): kent_gateway
+checks every Gent call after LiteLLM has resolved tier and fallback, and refuses it otherwise
+(`gent_upstream_refusal`); the installer refuses a config that points a Gent tier, or a
+fallback of one, anywhere else.
 | `metrics` | systemd credential `metrics_key` | none | `/metrics/` |
 
 Restricted identities get a deny-by-default request shape: no query string, no
@@ -1033,7 +1074,9 @@ SSDs that stall writes during TRIM.
 ## 23. Scaling Path
 
 1. Add the Anthropic key; tune `FALLBACK_TIMEOUT`.
-2. Differentiate smart and frontier (e.g. a cheaper Claude model for smart).
+2. smart is the local model thinking (3.2.11); on hardware too slow to think, point smart at
+   a cloud model instead, after taking it out of the Gent policy (the installer refuses a
+   non-local Gent tier).
 3. On bigger hardware, serve router/fast/smart from separate local models; shift
    tiers from cloud to local by editing the gateway config only.
 4. Additional nodes: add deployments to the same logical names; LiteLLM balances

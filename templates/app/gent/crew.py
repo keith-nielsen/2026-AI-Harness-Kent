@@ -27,9 +27,11 @@ def limits() -> dict:
 
 
 def llm(api_key: str, tier: str = "fast", max_tokens: int | None = None) -> LLM:
+    # timeout above the gateway's for smart (1200 s), so a smart call that runs out of time
+    # comes back as the gateway's fallback answer from fast instead of a client timeout
     mt = min(int(max_tokens or limits()["max_tokens"]), MAX_TOKENS_CAP)
     return LLM(model=tier, provider="openai", base_url=GATEWAY_URL, api_key=api_key,
-               temperature=0.3, timeout=900, max_tokens=mt)
+               temperature=0.3, timeout=1500, max_tokens=mt)
 
 
 def load(name: str) -> dict:
@@ -43,14 +45,14 @@ def team_knowledge() -> str:
 
 
 def build_crew(api_key: str, agent_key: str, description: str, expected_output: str, on_step=None,
-               max_tokens: int | None = None) -> Crew:
+               max_tokens: int | None = None, tier: str = "fast") -> Crew:
     agents = load("agents.yaml")
     spec = agents.get(agent_key) or next(iter(agents.values()))
     knowledge = team_knowledge()
     backstory = spec.get("backstory", "")
     if knowledge:
         backstory += "\n\nTeam knowledge from earlier projects (apply where relevant):\n" + knowledge
-    agent = Agent(role=spec["role"], goal=spec["goal"], backstory=backstory, llm=llm(api_key, max_tokens=max_tokens),
+    agent = Agent(role=spec["role"], goal=spec["goal"], backstory=backstory, llm=llm(api_key, tier, max_tokens=max_tokens),
                   tools=all_tools(), allow_delegation=False, verbose=True, max_iter=limits()["max_iter"])
     task = Task(description=description, expected_output=expected_output or "A complete result.", agent=agent)
     return Crew(agents=[agent], tasks=[task], process=Process.sequential, verbose=True, step_callback=on_step)

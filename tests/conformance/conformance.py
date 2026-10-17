@@ -170,7 +170,52 @@ def check_gateway() -> None:
        "§13 secrets", "gateway keys via LoadCredential (not env)")
     has_key = Path("/etc/kent/litellm/credentials/anthropic_api_key").stat().st_size > 0
     rec("PASS" if has_key else "INFO", "§5 frontier", "Anthropic key",
-        "configured" if has_key else "not configured (smart/frontier fall back to local fast)")
+        "configured" if has_key else "not configured (frontier falls back to local fast)")
+    check_tiers()
+
+
+def gateway_policy(module: Path = Path("/opt/kent-litellm/lib/kent_gateway.py")) -> tuple[set[str], set[str]]:
+    """(tiers the gent identity may call, local model API bases), read from the installed kent_gateway
+    source without importing it (the module needs the gateway's credentials at import)."""
+    import ast
+    consts = {}
+    for node in ast.parse(module.read_text()).body:
+        target = getattr(node, "target", None) or (node.targets[0] if isinstance(node, ast.Assign) else None)
+        if isinstance(target, ast.Name):
+            consts[target.id] = node.value
+    lit = lambda call: set(ast.literal_eval(call.args[0]))  # noqa: E731 - frozenset({...})
+    gent = next(v for k, v in zip(consts["POLICY"].keys, consts["POLICY"].values) if ast.literal_eval(k) == "gent")
+    models = next(v for k, v in zip(gent.keys, gent.values) if ast.literal_eval(k) == "models")
+    return lit(models), {b.rstrip("/") for b in lit(consts["LOCAL_MODEL_API_BASES"])}
+
+
+def check_tiers() -> None:
+    # router/fast = the local model, no thinking; smart = the same model thinking; Gents only ever on the
+    # local model server (kent_gateway checks every Gent call too; this checks the installed config).
+    try:
+        import yaml
+        lcfg = yaml.safe_load(Path("/etc/kent/litellm/config.yaml").read_text())
+        gent_tiers, local = gateway_policy()
+    except Exception as e:  # noqa: BLE001 - reported, not fatal
+        rec("FAIL", "§2 tiers", "gateway tier settings readable", f"{type(e).__name__}: {e}"[:200])
+        return
+    lp = {m.get("model_name"): m.get("litellm_params") or {} for m in lcfg.get("model_list") or []}
+    think = lambda t: ((lp.get(t, {}).get("extra_body") or {}).get("chat_template_kwargs") or {}).get("enable_thinking")  # noqa: E731
+    is_local = lambda t: str(lp.get(t, {}).get("api_base") or "").rstrip("/") in local  # noqa: E731
+    budget = (lp.get("smart", {}).get("extra_body") or {}).get("thinking_budget_tokens")
+    ok(is_local("smart") and think("smart") is True and isinstance(budget, int) and budget > 0, "§2 tiers",
+       "smart = local model, thinking on, with a thinking budget",
+       f"{lp.get('smart', {}).get('model')} at {lp.get('smart', {}).get('api_base')}, budget {budget}")
+    for t in ("router", "fast"):
+        ok(is_local(t) and think(t) is False, "§2 tiers", f"{t} = local model, thinking off")
+    fallbacks = {}
+    for entry in (lcfg.get("router_settings") or {}).get("fallbacks") or []:
+        for k, v in entry.items():
+            fallbacks.setdefault(k, []).extend(v)
+    reach = set(gent_tiers) | {f for t in gent_tiers for f in fallbacks.get(t, [])}
+    off = sorted(t for t in reach if not is_local(t))
+    ok(not off, "§12 security", "every tier a Gent can reach (incl. fallbacks) is the local model server",
+       f"{sorted(reach)}" + (f"; NOT local: {off}" if off else ""))
 
 
 def check_observability() -> None:

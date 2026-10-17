@@ -40,8 +40,9 @@ INFERENCE_ROUTES = frozenset({
 POLICY: dict[str, dict[str, frozenset[str] | None]] = {
     "operator": {"models": None, "routes": None},
     "kent":     {"models": None, "routes": None},
-    # Local tiers only; Gents escalate to Kent for anything more.
-    "gent":     {"models": frozenset({"router", "fast"}), "routes": INFERENCE_ROUTES},
+    # Local tiers only (smart = the local model thinking); Gents escalate to Kent for anything more.
+    # Every Gent call must also land on the local model server: see gent_upstream_refusal.
+    "gent":     {"models": frozenset({"router", "fast", "smart"}), "routes": INFERENCE_ROUTES},
     # Prometheus scrape: no models at all, metrics endpoint only.
     "metrics":  {"models": frozenset(), "routes": frozenset({"/metrics", "/metrics/"})},
 }
@@ -64,6 +65,9 @@ RESTRICTED_BODY_FIELDS = frozenset({
     "reasoning_effort", "user",
 })
 RESTRICTED_FORBIDDEN_HEADERS = frozenset({"x-litellm-model"})
+# The local model server (kent-llama): the only upstream a Gent's call may reach, whatever tier,
+# route or fallback took it there. Checked per call, after routing (gent_upstream_refusal).
+LOCAL_MODEL_API_BASES = frozenset({"http://127.0.0.1:8080/v1"})
 
 _CRED_DIR = Path(os.environ.get("CREDENTIALS_DIRECTORY", "/nonexistent"))
 
@@ -205,9 +209,50 @@ def repair_tool_history(messages) -> int:
     return n
 
 
+def thinking_max_tokens(kwargs: dict) -> int:
+    """Add a thinking deployment's budget to the caller's max_tokens, in place; returns the tokens added.
+
+    A tier that turns thinking on (litellm_params.extra_body: chat_template_kwargs.enable_thinking and
+    thinking_budget_tokens) still gets the caller's max_tokens, sized for the answer alone. llama-server
+    counts reasoning tokens against it, so reasoning could use it up and leave no answer. A caller that
+    sets no limit keeps none."""
+    eb = kwargs.get("extra_body")
+    if not isinstance(eb, dict) or not (eb.get("chat_template_kwargs") or {}).get("enable_thinking"):
+        return 0
+    budget = eb.get("thinking_budget_tokens")
+    if not isinstance(budget, int) or isinstance(budget, bool) or budget <= 0:
+        return 0
+    added = 0
+    for key in ("max_tokens", "max_completion_tokens"):
+        v = kwargs.get(key)
+        if isinstance(v, int) and not isinstance(v, bool) and v > 0:
+            kwargs[key] = v + budget
+            added = budget
+    return added
+
+
+def gent_upstream_refusal(kwargs: dict) -> str | None:
+    """Why a Gent's call must not go to this deployment, or None. Gents may use only the local model
+    server; a config that points a Gent-permitted tier (or its fallback) anywhere else, a cloud tier
+    included, is refused here at call time, after LiteLLM has resolved tier and fallback."""
+    meta = kwargs.get("metadata") or {}
+    identity = meta.get("user_api_key_alias") or meta.get("user_api_key_user_id")
+    if not isinstance(identity, str) or not (identity == "gent" or identity.startswith("gent-")):
+        return None
+    base = str(kwargs.get("api_base") or "").rstrip("/")
+    if base in {b.rstrip("/") for b in LOCAL_MODEL_API_BASES}:
+        return None
+    return f"{identity}: call routed to a non-local deployment ({kwargs.get('model')} at {base or 'provider default'})"
+
+
+class GentUpstreamRefused(PermissionError):
+    pass
+
+
 class KentActivityLogger(CustomLogger):
     """One JSON line per gateway call on stdout (journald → Alloy → Loki). Also repairs tool-call
-    history that the local model server could not render (repair_tool_history)."""
+    history that the local model server could not render (repair_tool_history), and gives thinking
+    tiers room for their reasoning (thinking_max_tokens)."""
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         if isinstance(data, dict) and (n := repair_tool_history(data.get("messages"))):
@@ -216,6 +261,18 @@ class KentActivityLogger(CustomLogger):
                               "identity": getattr(user_api_key_dict, "key_alias", None),
                               "model_group": data.get("model")}), file=sys.stdout, flush=True)
         return data
+
+    async def async_pre_call_deployment_hook(self, kwargs, call_type):
+        # Runs after the deployment is chosen (auto has already picked its tier), before the request.
+        if why := gent_upstream_refusal(kwargs):
+            print(json.dumps({"kent_event": "access_denied",
+                              "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                              "identity": (kwargs.get("metadata") or {}).get("user_api_key_alias"),
+                              "route": "deployment", "model": str(kwargs.get("model"))[:200],
+                              "reason": why[:300], "client": None}), file=sys.stdout, flush=True)
+            raise GentUpstreamRefused(why)
+        thinking_max_tokens(kwargs)
+        return kwargs
 
     def _emit(self, kwargs, start_time, end_time, status: str) -> None:
         slp = kwargs.get("standard_logging_object") or {}
