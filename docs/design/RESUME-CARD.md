@@ -2,10 +2,9 @@
 
 ## START HERE — 2026-10-18 (session exit point)
 
-**Released:** v0.1.0-rc.7 (architecture 3.3.1) — PR #2 merged to `main` (f3da7fa), annotated tag, GitHub
-pre-release. `release/v0.1.0`: origin at a4d7731 (docs, ahead of main; goes in with the next merge), plus one
-LOCAL commit with this START HERE section (not pushed; push when convenient).
-Working tree clean except `docs/design/WHY.md` + `docs/design/WHY operator edits.md`: UNTRACKED ON PURPOSE
+**Released:** v0.1.0-rc.8 (architecture 3.4.0, thinking-budget triage) — PR #3 merged to `main` (944ba16), annotated
+tag, GitHub pre-release 2026-10-18 (rc.7 = PR #2, f3da7fa, five tiers). `release/v0.1.0` = origin plus this card's
+bookkeeping commit. Working tree clean except `docs/design/WHY.md` + `docs/design/WHY operator edits.md`: UNTRACKED ON PURPOSE
 (operator: kept out of rc.7, will add later; never commit/push without asking).
 
 **Live on the reference machine (installed 2026-10-17/18, sim-routed gateway):** five tiers — fast (local, no
@@ -33,7 +32,7 @@ reply, 50 s. => Kent can route itself to any tier from its shell. Operator: a CO
 Lesson (memory frontier-oracle): Monitor the oracle queue whenever the oracle runs — first attempt lost a frontier
 answer because I did not watch it.
 
-**Task 5 (triage) INSTALLED 2026-10-18 15:22 (sim-routed; uncommitted) — see TASKS item 5.** Conformance 165 PASS /
+**Task 5 (triage) INSTALLED 2026-10-18 15:22 (sim-routed) and RELEASED in rc.8 — see TASKS item 5.** Conformance 165 PASS /
 0 FAIL / 17 INFO (new: triage settings valid, smart budget only, Kent only, INFO version). Kent via installed gateway:
 17*23 -> triage 8.8 -> 2048, 391; train puzzle -> triage 7.5 -> 2048, correct (~15 min); first triage after restart
 took 26 s (cold cache, Kent's full prompt; real call reused it) — near the 30 s timeout. Bench tools re-installed.
