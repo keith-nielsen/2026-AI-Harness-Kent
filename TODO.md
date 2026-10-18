@@ -66,9 +66,15 @@ Audit report: `~/.local/share/kent/evidence/2026-10-18-prepurge-audit/PREPURGE-A
       /opt/kent-llama/BUILD-INFO); when no --llama-build is given, the llama module fetches and builds that commit
       and checks the binaries against recorded hashes (today a purge removes /opt/kent-llama and a reinstall needs
       ~/Documents/repo/bench/llama-builds/v0.6.0/build-cuda/bin or a manual buildv06.sh)
-- [ ] Re-fetchable models: record each model file's source (Hugging Face repo, revision, file) next to its hash in
-      models.sha256, so a missing or damaged model is downloaded and verified like every other pinned artifact
-      (operator 2026-10-18: a second download mirror and keeping the cache through a purge are not needed)
+- [ ] Re-fetchable models: record each model file's source (Hugging Face repo, revision, file, SHA-256, size) per
+      model set, so a missing or damaged model is downloaded and verified like every other pinned artifact.
+      Operator decisions 2026-10-18: the recommended sources are the vendor's own model or Unsloth's optimised build
+      (the `mtp` set: Unsloth Qwen3.6-35B-A3B MTP UD-Q4_K_XL, 22 GB + 858 MB mmproj; the repo is identified by
+      matching Hugging Face's published SHA-256 to our recorded hashes); the `uc` set stays a local testing set with
+      no download source (not "normal"). A missing model stops the install with a message offering
+      `--fetch-models` (no automatic 22 GB download); the fetch checks free space first (DATA had 96 GB free).
+      A second download mirror and keeping the cache through a purge are not needed.
+      Estimate (2026-10-18): item build-from-source ~3-4 h, re-fetchable models ~3-5 h, release ~30 min.
 - [ ] Remove the rollback copies /opt/kent-hermes.v0215 and /opt/kent-llama.forkc26cbdf (operator 2026-10-18;
       pending one sudo dialog)
 
