@@ -62,6 +62,13 @@ Audit report: `~/.local/share/kent/evidence/2026-10-18-prepurge-audit/PREPURGE-A
       fs.protected_regular): check the log is writable up front and fail loudly
 - [ ] Docs still cite ~/.local/share/kent/install-records (archived in ~/Documents/kent-uninstall-evidence-20260929.tar.gz)
 - [ ] Strata and terminal-bench Docker images/networks are in no Kent record: decide whether they are bench tooling
+- [ ] Reinstall without a local llama.cpp build: pin the source commit in versions.env (now d812350, from
+      /opt/kent-llama/BUILD-INFO); when no --llama-build is given, the llama module fetches and builds that commit
+      and checks the binaries against recorded hashes (today a purge removes /opt/kent-llama and a reinstall needs
+      ~/Documents/repo/bench/llama-builds/v0.6.0/build-cuda/bin or a manual buildv06.sh)
+- [ ] Re-fetchable models: record each model file's source (Hugging Face repo, revision, file) next to its hash in
+      models.sha256, so a missing or damaged model is downloaded and verified like every other pinned artifact
+      (operator 2026-10-18: a second download mirror and keeping the cache through a purge are not needed)
 - [ ] Remove the rollback copies /opt/kent-hermes.v0215 and /opt/kent-llama.forkc26cbdf (operator 2026-10-18;
       pending one sudo dialog)
 
