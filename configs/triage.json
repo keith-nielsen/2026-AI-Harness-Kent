@@ -1,0 +1,20 @@
+{
+  "version": "conf09-nohead-e5.0-2026-10-18",
+  "comment": "Thinking-budget triage for auto (kent_gateway.apply_triage). Installed as /etc/kent/litellm/triage.json. Question: conf09 without the routing-check preamble (bench/runs/triagecheck-10181435: 54 vs 74 prompt tokens, same separation, AUROC 0.67 vs 0.68 on helps_4k). Threshold: expected digit < 5.0 sends 33 of 115 bench probes with a usable answer to 4096 (~30%, as conf09 did). Low-water unset: no classifier separated the prompts that are safe without thinking. Timeout 30 s: a cold or long conversation needs the triage to read the whole prompt, which the real request then reuses, so waiting moves time rather than adding it (5 s timed out on a cold 11k prompt).",
+  "enabled": true,
+  "identities": [
+    "kent"
+  ],
+  "model_group": "auto",
+  "routed_model": "default",
+  "head": "",
+  "question": "How likely is it that the assistant's next reply would be fully correct if it answered right now, with no hidden thinking? 0 = very unlikely, 9 = certain. Reply with one digit only.",
+  "options": "0123456789",
+  "min_mass": 0.5,
+  "high_water": {
+    "below": 5.0,
+    "thinking_budget_tokens": 4096
+  },
+  "low_water": null,
+  "timeout_s": 30
+}

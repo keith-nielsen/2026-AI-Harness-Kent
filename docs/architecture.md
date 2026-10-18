@@ -1,12 +1,30 @@
 ---
 title: Kent — Agentic Stack Architecture
-version: 3.3.1
+version: 3.4.0
 date: 2026-10-18
 authors:
   - Keith Nielsen <keith-nielsen@github>
 status: Release candidate (v0.1.0-rc) — describes the installed, conformance-tested system
 license: Apache-2.0
 changelog:
+  - version: 3.4.0
+    date: 2026-10-18
+    summary: >
+      Thinking-budget triage (classifier redesign task 5; operator decisions 2026-10-17/18:
+      high-water on with conf09 at ~30%, low-water unset, Kent only, keep auto's classifier and
+      its frontier escalation). When Kent's auto call lands on default, kent_gateway asks the
+      local model one question first (the conversation plus a conf09 "how likely is a correct
+      reply without thinking, 0-9" message, without the routing-check preamble: 54 prompt
+      tokens instead of 74, same separation; 1 token, thinking off, token probabilities). An
+      expected digit below 5.0 raises that call's thinking budget to smart's 4096; errors, a
+      30 s timeout or no usable answer leave it at 2048 (5 s at first; a cold
+      11k-token prompt timed out, and the real request reuses what the triage reads). Settings in configs/triage.json
+      (/etc/kent/litellm/triage.json, re-read on change); one kent_event "triage" log line per
+      decision, joined to its call by litellm_call_id (now also on llm_call lines). Measured on
+      the real model through a scratch gateway: decisions match the offline triage check
+      (8 probes), the real request reuses the triage's cached prompt (5 new tokens), cost about
+      1.3 s per triaged turn with the preamble (the triage message is always new prompt); the
+      shorter wordings tried lost usable answers or separation (triagecheck-10181435).
   - version: 3.3.1
     date: 2026-10-18
     summary: >
@@ -392,7 +410,7 @@ the ratio moves toward local as local models improve.
 | `smart` | the same local model, thinking up to 4096 tokens | same | harder reasoning and coding; Gent tasks triaged "think", Gent retries, learning reviews |
 | `cheap` | DeepSeek V4.1 Flash (Kent only) | local model (dev config); the oracle as `oracle-cheap` (sim, sim-routed) | reserved: defined so the tiering is in place; nothing routes to it yet |
 | `frontier` | Claude Opus 5.5 (Kent only) | local model (dev config); the oracle (sim, sim-routed) | hard problems, escalations, assessments, QA |
-| `auto` | router → default / frontier (interim, see §4) | same | the default for Kent and the operator |
+| `auto` | router → default / frontier (interim, see §4); for Kent, triage may raise default to smart's budget | same | the default for Kent and the operator |
 
 default and smart are fast's model with thinking turned on per request, so they need no
 second model and no extra VRAM. The gateway sets it in each deployment's `extra_body`, which overrides
@@ -548,6 +566,34 @@ hard prompts → smart/frontier 8/8; prompt injections telling the router to
 downgrade or upgrade changed no decision. On the 42 hard bench probes the same classifier
 sent 54% of the prompts that needed thinking to fast (2026-10-16), which is why its fast
 label no longer means thinking off.
+
+**Thinking-budget triage (3.4.0, Kent only).** When the router sends a Kent call to `default`,
+`kent_gateway.apply_triage` first sends the local model the same conversation (and tools) plus
+one user message: "How likely is it that the assistant's next reply would be fully correct if it
+answered right now, with no hidden thinking? 0 = very unlikely, 9 = certain. Reply with one digit
+only."
+It asks for one token with thinking off and reads the digit probabilities. If the expected digit
+is below the high-water mark (5.0), the call keeps `default` but gets smart's thinking budget
+(4096); otherwise, or on any error, timeout (30 s) or unusable answer, it stays at 2048. The
+low-water mark (send easy calls to thinking off) is unset: no classifier tried separated those
+calls reliably enough. Settings: `configs/triage.json` → `/etc/kent/litellm/triage.json`
+(checked by the installer and conformance; edits apply without a restart). Each decision is a
+`kent_event: "triage"` line (score, mass, decision, budget, ms, version), joined to its call
+by `litellm_call_id`.
+
+Calibration: on the 115 bench probes the threshold sends 33 with a usable answer to 4096 (~30%;
+`triagecheck-1017` with the preamble, `triagecheck-10181435` without); with the preamble it scored 88.7% at 57 s per item against 85.8% / 50 s for always
+2048 and 88.1% / 65 s for always 4096 (in-sample; held out on the hard 42, the top half scored
+75.4% vs 70.1% for a random half). Live through a scratch gateway on the real model, the
+decisions matched the offline ones and the real request reused the triage's cached prompt.
+The triage costs about 1.2-1.3 s per triaged turn: the triage message follows the
+conversation, so it is never cached, and this server reads new prompt slowly (part of the MoE
+runs on the CPU); about half of it is fixed (chat formatting, one decode step). Wording
+(2026-10-18, 115 probes): dropping the "[Routing check …]" preamble cut the message from 74
+to 54 tokens (0.97 → 0.87 s median) with the same separation (AUROC on 4096-helps 0.67 vs
+0.68, 4 vs 2 unusable answers); shorter wordings (32-39 tokens, ~0.55 s) made the model start
+answering instead of rating (16-71 of 115 unusable) or separated worse (0.59). The threshold reflects bench probes, not real Kent traffic; telemetry and shadow
+runs (later tasks) are how it gets recalibrated.
 
 ---
 
@@ -870,7 +916,7 @@ tooling not built.
 
 No key or a forged key → 401; a Gent key on cheap/frontier, admin routes, a
 query-string model or a routing header → 403. Covered by the gateway unit tests
-(`tests/gateway`, 196) and 50 live tests with a canary upstream.
+(`tests/gateway`, 224) and 50 live tests with a canary upstream.
 
 ### 12.3 Containers
 

@@ -11,6 +11,7 @@
 | **Gateway** | The LiteLLM proxy at `127.0.0.1:4000`. Every model call goes through it; it authenticates identities (`kent_gateway.py`), classifies `auto` requests and routes them to a tier. |
 | **Tier** | Logical model name: `router` (classifies), `fast` (local, thinking off), `default` and `smart` (local, thinking up to 2048 / 4096 tokens), `cheap` (DeepSeek V4.1 Flash; reserved) and `frontier` (Claude Opus 5.5), the cloud tiers, Kent only; `auto` (router decides). |
 | **Router** | The classification step behind `auto` (LiteLLM complexity router on the local model). Interim mapping (3.3.0): default, or frontier when classified up; a failed or unclassifiable request goes to default. |
+| **Triage** | Kent only (3.4.0): before a Kent `auto` call that the router sent to `default` runs, the gateway asks the local model how likely a correct reply without thinking is (0–9; one extra message, 1 token). Below the high-water mark (5.0) the call gets smart's 4096-token budget; otherwise, or on any error, it keeps 2048. Settings: `/etc/kent/litellm/triage.json`. |
 | **Fallback** | When a cloud tier fails or exceeds `FALLBACK_TIMEOUT`, the gateway answers from the local `fast` tier. |
 | **Identity** | Who a gateway key belongs to: `operator`, `kent`, `gent`, `gent-<id>`, `metrics`. Determines which tiers and routes it may use. |
 | **Escalation** | A Gent asking Kent for help it can't get locally: written to its `shared_learnings`, answered by Kent on frontier into the Gent's inbox, then the task resumes. Budget: 5 per Gent per 24 h. |

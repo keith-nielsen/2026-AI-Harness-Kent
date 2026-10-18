@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import HTTPException, Request
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -250,6 +253,119 @@ class GentUpstreamRefused(PermissionError):
     pass
 
 
+# Thinking-budget triage (architecture 3.4.0). For an auto request that the router sent to the default
+# tier, ask the local model one extra question first: the real conversation plus a triage message,
+# 1 token, thinking off, token probabilities. A low expected "correct without thinking" digit (below
+# the high-water mark) raises this request's thinking budget to the smart tier's. Settings live in
+# triage.json; any error, timeout or unusable answer leaves the request as the router sent it.
+TRIAGE_CONFIG = Path(os.environ.get("KENT_TRIAGE_CONFIG") or "/etc/kent/litellm/triage.json")
+_triage_cache: dict[str, object] = {"mtime": None, "cfg": None}
+
+
+def triage_config(path: Path | None = None) -> dict | None:
+    """The triage settings, re-read when the file changes; None when absent, invalid or disabled."""
+    path = path or TRIAGE_CONFIG
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    if _triage_cache["mtime"] != (str(path), mtime):
+        try:
+            cfg = json.loads(path.read_text())
+            hw = cfg["high_water"]
+            if not (isinstance(hw["below"], (int, float)) and isinstance(hw["thinking_budget_tokens"], int)
+                    and cfg["options"] and cfg["question"] and cfg["timeout_s"] > 0):
+                raise ValueError("bad triage settings")
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            print(json.dumps({"kent_event": "triage_config_invalid", "path": str(path), "error": str(e)[:200]}),
+                  file=sys.stdout, flush=True)
+            cfg = None
+        _triage_cache.update(mtime=(str(path), mtime), cfg=cfg)
+    cfg = _triage_cache["cfg"]
+    return cfg if isinstance(cfg, dict) and cfg.get("enabled") else None
+
+
+def triage_applies(kwargs: dict, cfg: dict) -> bool:
+    """Only the configured identities' auto calls that the router sent to the configured tier."""
+    meta = {**(kwargs.get("litellm_metadata") or {}), **(kwargs.get("metadata") or {})}
+    routing = meta.get("routing_decision") or {}
+    return (meta.get("user_api_key_alias") in cfg.get("identities", ())
+            and meta.get("model_group") == cfg.get("model_group")
+            and routing.get("routed_model") == cfg.get("routed_model"))
+
+
+def triage_body(kwargs: dict, cfg: dict) -> dict:
+    """The triage request: the real conversation (and tools, so the prompt prefix matches and the real
+    request reuses the cached prompt) plus one user message holding the triage question."""
+    body = {"model": "triage", "max_tokens": 1, "temperature": 0, "logprobs": True, "top_logprobs": 20,
+            "cache_prompt": True, "chat_template_kwargs": {"enable_thinking": False},
+            "messages": list(kwargs.get("messages") or [])
+            + [{"role": "user", "content": cfg.get("head", "") + cfg["question"]}]}
+    if kwargs.get("tools"):
+        body["tools"] = kwargs["tools"]
+    return body
+
+
+def triage_score(top_logprobs: list, options: str) -> tuple[float, float]:
+    """Expected option index over the answer options, and the probability mass they hold."""
+    p = dict.fromkeys(options, 0.0)
+    for e in top_logprobs or []:
+        t = str(e.get("token", "")).strip()
+        if t in p:
+            p[t] += math.exp(e.get("logprob", float("-inf")))
+    mass = sum(p.values())
+    if not mass:
+        return (len(options) - 1) / 2, 0.0
+    return sum(i * v / mass for i, v in enumerate(p.values())), mass
+
+
+def triage_budget(score: float, mass: float, cfg: dict) -> int | None:
+    """The thinking budget the triage asks for, or None to leave the request as routed."""
+    if mass < cfg.get("min_mass", 0.5):
+        return None
+    hw = cfg["high_water"]
+    return hw["thinking_budget_tokens"] if score < hw["below"] else None
+
+
+async def apply_triage(kwargs: dict, post=None) -> dict | None:
+    """Run the triage for a call it applies to and set the thinking budget in place; returns the
+    decision record (also logged), or None when triage is off or does not apply. post(url, body,
+    timeout) -> response JSON is injectable for tests."""
+    cfg = triage_config()
+    if not cfg or not triage_applies(kwargs, cfg):
+        return None
+    eb = kwargs.get("extra_body")
+    rec = {"kent_event": "triage", "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+           "litellm_call_id": kwargs.get("litellm_call_id"), "version": cfg.get("version"), "score": None,
+           "mass": None, "decision": "default", "budget": (eb or {}).get("thinking_budget_tokens"), "error": None}
+    t0 = time.monotonic()
+    try:
+        if not isinstance(eb, dict):
+            raise ValueError("deployment has no extra_body to set a budget in")
+        url = str(kwargs.get("api_base") or "").rstrip("/") + "/chat/completions"
+        resp = await (post or _post_json)(url, triage_body(kwargs, cfg), cfg["timeout_s"])
+        lp = (resp["choices"][0].get("logprobs") or {}).get("content") or [{}]
+        score, mass = triage_score(lp[0].get("top_logprobs"), cfg["options"])
+        rec.update(score=round(score, 3), mass=round(mass, 3))
+        if (budget := triage_budget(score, mass, cfg)) is not None:
+            kwargs["extra_body"] = {**eb, "thinking_budget_tokens": budget}
+            rec.update(decision="smart", budget=budget)
+        elif mass < cfg.get("min_mass", 0.5):
+            rec["error"] = "no usable answer"
+    except Exception as e:  # noqa: BLE001 — triage must never fail the call
+        rec["error"] = f"{type(e).__name__}: {e}"[:200]
+    rec["ms"] = round((time.monotonic() - t0) * 1000)
+    print(json.dumps(rec, default=str), file=sys.stdout, flush=True)
+    return rec
+
+
+async def _post_json(url: str, body: dict, timeout: float) -> dict:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.post(url, json=body)
+        r.raise_for_status()
+        return r.json()
+
+
 class KentActivityLogger(CustomLogger):
     """One JSON line per gateway call on stdout (journald → Alloy → Loki). Also repairs tool-call
     history that the local model server could not render (repair_tool_history), and gives thinking
@@ -272,6 +388,7 @@ class KentActivityLogger(CustomLogger):
                               "route": "deployment", "model": str(kwargs.get("model"))[:200],
                               "reason": why[:300], "client": None}), file=sys.stdout, flush=True)
             raise GentUpstreamRefused(why)
+        await apply_triage(kwargs)       # may raise this call's thinking budget; before max_tokens is sized
         thinking_max_tokens(kwargs)
         return kwargs
 
@@ -296,6 +413,7 @@ class KentActivityLogger(CustomLogger):
             "completion_tokens": slp.get("completion_tokens"),
             "latency_s": round((end_time - start_time).total_seconds(), 3) if start_time and end_time else None,
             "call_id": slp.get("id"),
+            "litellm_call_id": kwargs.get("litellm_call_id"),   # joins the call to its triage line
         }
         if status == "failure":  # why it failed (a silent fallback otherwise hides the cause)
             err = slp.get("error_information") or {}
