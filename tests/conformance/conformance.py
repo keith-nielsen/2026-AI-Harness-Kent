@@ -233,6 +233,23 @@ def check_tiers() -> None:
     off = sorted(t for t in reach if not is_local(t))
     ok(not off, "§12 security", "every tier a Gent can reach (incl. fallbacks) is the local model server",
        f"{sorted(reach)}" + (f"; NOT local: {off}" if off else ""))
+    # Thinking-budget triage (kent_gateway.apply_triage): Kent's auto calls only; it raises a budget
+    # within the local model, so it may never name a Gent or point outside the thinking tiers.
+    try:
+        tri = json.loads(Path("/etc/kent/litellm/triage.json").read_text())
+        hw = tri["high_water"]
+        valid = (isinstance(hw["below"], (int, float)) and hw["thinking_budget_tokens"] == budget["smart"]
+                 and tri["routed_model"] == "default" and tri["model_group"] == "auto")
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        tri, valid = None, False
+        ok(False, "§2 tiers", "triage settings installed and valid", f"/etc/kent/litellm/triage.json: {e}")
+    if tri is not None:
+        ok(valid, "§2 tiers", "triage raises auto's default to the smart budget only",
+           f"below {hw.get('below')} -> {hw.get('thinking_budget_tokens')} (smart {budget['smart']})")
+        ok(set(tri.get("identities") or []) == {"kent"}, "§2 tiers", "triage applies to Kent only",
+           ", ".join(tri.get("identities") or []))
+        rec("INFO", "§2 tiers", "thinking-budget triage", f"{'on' if tri.get('enabled') else 'OFF'}, version "
+            f"{tri.get('version')}, high-water below {hw.get('below')}, low-water {tri.get('low_water')}")
 
 
 def check_observability() -> None:

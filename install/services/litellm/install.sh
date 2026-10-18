@@ -4,7 +4,7 @@
 # Installs the LiteLLM gateway as a hardened system service:
 #   account  litellm:litellm (system, no login, no home in /home)
 #   code     /opt/kent-litellm            (root-owned venv, hash-locked deps)
-#   config   /etc/kent/litellm/config.yaml (root:litellm 0640)
+#   config   /etc/kent/litellm/config.yaml, triage.json (root:litellm 0640)
 #   secrets  /etc/kent/litellm/credentials/ (root-only; via LoadCredential)
 #   state    /var/lib/litellm             (systemd StateDirectory)
 #   unit     kent-litellm.service         (127.0.0.1:4000)
@@ -246,6 +246,19 @@ PY
     chown root:"$ACCOUNT" "${CONF_DIR}/config.yaml"
     chmod 0640 "${CONF_DIR}/config.yaml"
 fi
+
+# Thinking-budget triage settings (kent_gateway.apply_triage reads them per call; edits apply without
+# a restart). Checked here so a broken file is refused at install, not silently ignored at run time.
+TRIAGE_SRC="${KENT_ROOT}/configs/triage.json"
+python3 - "$TRIAGE_SRC" <<'PY' || die "$(basename "$TRIAGE_SRC") is not valid triage settings"
+import json, sys
+c = json.load(open(sys.argv[1]))
+hw = c["high_water"]
+assert isinstance(c["enabled"], bool) and c["identities"] and c["options"] and c["question"] and c["timeout_s"] > 0
+assert isinstance(hw["below"], (int, float)) and isinstance(hw["thinking_budget_tokens"], int)
+assert "gent" not in c["identities"] and not any(str(i).startswith("gent-") for i in c["identities"])
+PY
+run install -m 0640 -o root -g "$ACCOUNT" "$TRIAGE_SRC" "${CONF_DIR}/triage.json"
 
 # Tunables: keep an existing value unless --fallback-timeout was given.
 if [[ -n "$FALLBACK_TIMEOUT" || ! -s "$ENV_FILE" ]]; then

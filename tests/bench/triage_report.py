@@ -49,6 +49,7 @@ SCORES = {
     "effort4": (lambda p: p["0"], expect), "effort4d": (lambda p: p["0"], expect),
     "steps": (lambda p: p["0"], expect),
     "diff15": (lambda p: -expect(p), expect), "conf09": (expect, lambda p: -expect(p)),
+    **{v: (expect, lambda p: -expect(p)) for v in ("c09_nohead", "c09_a", "c09_b", "c09_c", "c09_d")},
     "direct_ok": (lambda p: p["Y"], lambda p: p["N"]), "risk": (lambda p: p["N"], lambda p: p["Y"]),
     "long_helps": (lambda p: p["N"], lambda p: p["Y"]),
 }

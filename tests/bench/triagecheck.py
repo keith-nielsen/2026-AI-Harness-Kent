@@ -51,6 +51,15 @@ VARIANTS = {
               "action), 1 = one or two, 2 = several, 3 = many. Reply with one digit only.", "0123"),
     "long_helps": ("Would long careful thinking (about 4,000 tokens) give a better next reply than short thinking "
                    "(about 2,000 tokens)? Reply Y or N only.", "YN"),
+    # Shorter forms of conf09 (2026-10-18: the triage message is never cached, so its length is the gateway's
+    # per-turn cost). An optional third element replaces HEAD ("" = no preamble).
+    "c09_nohead": ("How likely is it that the assistant's next reply would be fully correct if it answered right now, "
+                   "with no hidden thinking? 0 = very unlikely, 9 = certain. Reply with one digit only.", "0123456789", ""),
+    "c09_a": ("Chance the next reply is fully correct without thinking? 0 = none, 9 = certain. One digit.",
+              "0123456789", "[Routing check] "),
+    "c09_b": ("Without thinking, how likely is the next reply to be fully correct? 0-9, digit only.", "0123456789", ""),
+    "c09_c": ("Confidence (0-9) that a reply given now, without thinking, is fully correct:", "0123456789", ""),
+    "c09_d": ("Correct without thinking? Rate 0-9:", "0123456789", ""),
 }
 REPEAT = "effort4"
 A = None
@@ -71,9 +80,9 @@ def post(path, body, timeout=900):
 
 def ask(it, name):
     body = benchrun.probe_request(it, "off")
-    q, opts = VARIANTS[name]
+    q, opts, *head = VARIANTS[name]
     b = {k: v for k, v in body.items() if k in ("model", "messages", "tools")}
-    b.update(messages=b["messages"] + [{"role": "user", "content": HEAD + q}], max_tokens=1, temperature=0,
+    b.update(messages=b["messages"] + [{"role": "user", "content": (head[0] if head else HEAD) + q}], max_tokens=1, temperature=0,
              logprobs=True, top_logprobs=20, id_slot=0, cache_prompt=True,
              chat_template_kwargs={"enable_thinking": False})
     t0 = time.time()

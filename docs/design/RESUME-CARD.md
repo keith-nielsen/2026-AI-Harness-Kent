@@ -33,6 +33,10 @@ reply, 50 s. => Kent can route itself to any tier from its shell. Operator: a CO
 Lesson (memory frontier-oracle): Monitor the oracle queue whenever the oracle runs — first attempt lost a frontier
 answer because I did not watch it.
 
+**Task 5 (triage) INSTALLED 2026-10-18 15:22 (sim-routed; uncommitted) — see TASKS item 5.** Conformance 165 PASS /
+0 FAIL / 17 INFO (new: triage settings valid, smart budget only, Kent only, INFO version). Kent via installed gateway:
+17*23 -> triage 8.8 -> 2048, 391; train puzzle -> triage 7.5 -> 2048, correct (~15 min); first triage after restart
+took 26 s (cold cache, Kent's full prompt; real call reused it) — near the 30 s timeout. Bench tools re-installed.
 **Next (operator's order unknown; ask):** (a) real Anthropic (+ DeepSeek) keys -> `--config prod`, verify the
 DeepSeek model id, re-run conformance, v0.1.0 final; (b) classifier task 5 = gateway triage pre-call step (conf09
 high-water ~30% -> smart, default otherwise, error -> default) — see CLASSIFIER REDESIGN PLAN below; (c) decide Kent
@@ -180,6 +184,29 @@ higher-reasoning, slower model (300B class) for audits/deep work. Keep general c
 5. Gateway pre-call step in kent_gateway.py — triage call, thresholds, forward with off/2048/4096 + id_slot;
    feature flag; any triage error/timeout -> 2048 default. Test: unit tests + scratch gateway with stub upstream
    (as tierexp), then the real local model.
+   BUILT 2026-10-18 (uncommitted, NOT installed; architecture 3.4.0). Operator: keep auto + its classifier and
+   frontier escalation; triage Kent only. Design: async_pre_call_deployment_hook -> apply_triage when identity kent,
+   model_group auto, routed_model default: conf09 question (as tested) on the real conversation + tools, 1 token,
+   thinking off, logprobs; expected digit < 5.0 -> this call's extra_body thinking_budget_tokens 4096 (default and
+   smart differ only in budget); min_mass 0.5; any error / 5 s timeout -> stays 2048. No id_slot (cache reuse works
+   without it). configs/triage.json -> /etc/kent/litellm/triage.json (installer validates; re-read on mtime);
+   kent_event "triage" line + litellm_call_id on llm_call lines. Tests: tests/gateway/test_triage.py 27 (reproduces
+   triagecheck-1017 scores exactly; 34 below 5.0, 33 sent, 1 no usable answer); conformance: triage file valid,
+   budget = smart's, Kent only, INFO version. Stub gateway: all paths right (low->4096, high/fail/timeout->2048,
+   operator/by-name/frontier untouched). Real model (scratch gateway, 8 probes): decisions = offline, real request
+   reuses triage cache (5 new tokens). COST: triage ~1.3 s per triaged turn — the ~95-token question is always new
+   prompt (server reads ~1.2 s/100 new tokens; MoE partly on CPU); router classifier already ~3 s/turn. Option: a
+   shorter question (re-validate on the 115 with triagecheck, ~10 min GPU).
+   WORDING TUNED 2026-10-18 (operator: high-value target): triagecheck-10181435 (6 wordings x 115, triagecheck.py
+   c09_* variants, comparison evidence/2026-10-18-task5/shortq.py). Adopted c09_nohead = conf09 without the
+   "[Routing check ...]" preamble: 54 vs 74 tokens, median 0.87 vs 0.97 s, AUROC helps_4k 0.67 vs 0.68, unusable
+   4 vs 2, 33/115 sent at 5.0 (same as conf09). Shorter (32-39 tokens) -> model starts answering (16-71 unusable)
+   or separates worse (0.59). Through the gateway the 0.1 s saving is not visible (warm triage 1.5-1.7 s).
+   triage.json version conf09-nohead-e5.0-2026-10-18. FOUND: cold cache + 11k prompt -> triage hit the 5 s
+   timeout (stays 2048; real request reused part of the triage's prefill). Timeout 30 s (operator 2026-10-18; prefill is
+   reused, so waiting moves time rather than adding it). Not installed, uncommitted.
+   Operator note: higher accuracy may need fine-tuning (LoRA) — see reply 2026-10-18 for caveats. Scratch harness: scratchpad t5/
+   (stub.py, gw.py, realcheck.py) — copied to ~/.local/share/kent/evidence/2026-10-18-task5/
 6. Config + conformance — tiers/params for off/2048/4096 (4096 timeout), retire the complexity router for this
    path, conformance checks, architecture.md version bump. Install needs the operator's sudo dialog.
 7. Telemetry store (DECIDED 2026-10-17, see TELEMETRY STORAGE below) — writer in kent_gateway.py hooks, Kent

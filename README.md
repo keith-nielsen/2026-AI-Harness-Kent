@@ -1,9 +1,9 @@
 # Kent — Reference Agentic AI Stack
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Architecture](https://img.shields.io/badge/Architecture-v3.3.1-green)](docs/architecture.md)
+[![Architecture](https://img.shields.io/badge/Architecture-v3.4.0-green)](docs/architecture.md)
 [![Status](https://img.shields.io/badge/Status-v0.1.0--rc-orange)](https://github.com/keith-nielsen/2026-AI-Harness-Kent/releases)
-[![Conformance](https://img.shields.io/badge/Conformance-163%20pass%20%2F%200%20fail-brightgreen)](docs/conformance.md)
+[![Conformance](https://img.shields.io/badge/Conformance-165%20pass%20%2F%200%20fail-brightgreen)](docs/conformance.md)
 [![Validate](https://github.com/keith-nielsen/2026-AI-Harness-Kent/actions/workflows/validate.yml/badge.svg)](.github/workflows/validate.yml)
 
 **A reference template for a well-designed, fully integrated, self-hosted agentic
@@ -74,7 +74,7 @@ Operator ── `kent` command (as themselves; kent-operators group)
 - **Controls with evidence:** a control matrix mapped to ISO 27001, SOC 2,
   NIST 800-53, HIPAA and PCI DSS requirement areas ([`controls.md`](docs/controls.md)).
 - **Formal validation:** installation, operational and performance qualification
-  (IQ/OQ/PQ) evidence: 163-check conformance run, 602 automated tests (552 unit, 50 live) plus 24 in-container checks, end-to-end
+  (IQ/OQ/PQ) evidence: 165-check conformance run, 630 automated tests (580 unit, 50 live) plus 24 in-container checks, end-to-end
   simulation, and verified rollback to the pre-install state.
 - **Reversible by construction:** every module records what it creates; uninstall
   removes exactly that.
