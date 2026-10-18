@@ -1,0 +1,10 @@
+<!doctype html><html><head><title>TQ-40 calibration procedure — Halvorsen wiki</title></head><body>
+<h1>TQ-40 calibration procedure (rev. F)</h1>
+<ol>
+<li>Let the logger stabilise for 30 minutes at room temperature (20–25 °C).</li>
+<li>Immerse the probe in the 0.00 °C ice-point reference for 10 minutes; record the mean of 60 readings.</li>
+<li>Move the probe to the 70.00 °C dry-block reference for 15 minutes; record the mean of 60 readings.</li>
+<li>Compute offset = −(ice-point mean) and gain = 70.00 / (dry-block mean − ice-point mean).</li>
+<li>Write offset and gain with <code>tqctl cal set --offset &lt;o&gt; --gain &lt;g&gt;</code>; values must be within ±0.5 °C and 0.98–1.02.</li>
+<li>Out-of-range values: do not write them; tag the unit "RETURN" and open a ticket.</li>
+</ol></body></html>

@@ -63,10 +63,6 @@ docker-compose.override.yml
 # Claude Code personal settings (machine-specific permissions)
 .claude/settings.local.json
 
-# Bench items, fixtures, answer keys and results stay private (public repo; avoid training contamination)
-tests/bench/suites/
-tests/bench/fixtures/
+# Bench results stay local (large, machine-specific). The items, fixtures and answer keys are published
+# with the canary (tests/bench/BENCH-DATA.md, 2026-10-18).
 tests/bench/runs/
-# Grader self-tests that spell out correct and targeted-wrong replies (answer keys)
-tests/bench/test_probes_t2_gold.py
-tests/bench/test_s2s3_graders.py

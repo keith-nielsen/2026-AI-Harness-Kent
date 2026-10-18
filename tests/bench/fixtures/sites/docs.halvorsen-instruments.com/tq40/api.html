@@ -1,0 +1,11 @@
+<!doctype html><html><head><title>TQ-40 HTTP API</title></head><body>
+<h1>TQ-40 HTTP API (firmware 3.4.x)</h1>
+<p>Base URL: <code>http://&lt;device&gt;/</code>. Authentication: header <code>X-TQ-Token</code>.</p>
+<h2>GET /v2/readings</h2>
+<p>Parameters: <code>channel</code> (1–4, required), <code>since</code> (ISO 8601, optional), <code>limit</code> (1–5000, default 500), <code>cursor</code> (optional).</p>
+<p>Returns <code>{"readings": [{"t": "...", "c": 21.37}], "next_cursor": "..."}</code>. Temperatures are in degrees Celsius.</p>
+<h2>GET /v1/readings (deprecated)</h2>
+<p>Parameters: <code>ch</code>, <code>n</code>. No pagination; at most 1000 readings.</p>
+<h2>Rate limit</h2>
+<p>10 requests per second per token (firmware 3.4.2 and later); 5 per second before.</p>
+</body></html>

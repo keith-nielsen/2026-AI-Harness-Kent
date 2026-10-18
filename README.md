@@ -130,6 +130,7 @@ schemas/              kent.sql (Kent) and stack.sql (per Gent)
 templates/app/        Kent's SOUL.md and the Gent CEO/CrewAI package
 skills/kent/          Kent's Hermes skill: crew-designer
 tests/                unit, live, Gent isolation, simulation oracle, conformance check
+tests/bench/          evaluation suite for this harness: items, frozen fixture web, graders (see BENCH-DATA.md; canary-marked)
 ```
 
 ## Documentation

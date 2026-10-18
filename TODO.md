@@ -43,6 +43,28 @@ assessment history and open items: [`docs/conformance.md`](docs/conformance.md).
       tokens without acknowledgment" holds it back. Decide later: strip the key from the terminal's
       environment (keep it for Hermes's own model calls), a per-identity budget at the gateway, or accept
 
+## Bench and uninstall (operator decisions 2026-10-18, from the pre-purge audit)
+
+Audit report: `~/.local/share/kent/evidence/2026-10-18-prepurge-audit/PREPURGE-AUDIT-2026-10-18.md`.
+- [x] Publish the evaluation suite (items, fixtures, answer keys) with the canary (`tests/bench/BENCH-DATA.md`);
+      model-visible files unchanged, bench hash ignores the added canary line
+- [ ] Two tiers: a public **health benchmark** (`kent-admin benchmark`: does this install actually work — Kent tasks
+      with tools, one tiny crew, an escalation round-trip, a Gent cloud refusal, triage sanity; pass/fail + timings
+      reported against the reference machine, never failed on speed; ~20-40 min; cloud checks opt-in) next to the
+      evaluation suite (`tests/bench`, model/setting comparisons, hours)
+- [ ] Bench mode carries its own Gent template content (like the golden Kent state), so benchmarks do not depend on
+      the estate's adopted learnings; the estate's learnings stay estate data (backed up, not published)
+- [ ] Bench tooling as an installed module with a manifest; `uninstall.sh` runs its uninstall and `verify-clean.sh`
+      lists /opt/kent-bench, /var/lib/kent-bench, sudoers 93-kent-bench
+- [ ] `kent-admin backup`: Kent's home, Gent archives and a Gitea mirror (optionally metrics and the install cache)
+      before an uninstall; restore documented
+- [ ] `uninstall.sh --log` under /tmp fails silently (root cannot write another user's file in sticky /tmp,
+      fs.protected_regular): check the log is writable up front and fail loudly
+- [ ] Docs still cite ~/.local/share/kent/install-records (archived in ~/Documents/kent-uninstall-evidence-20260929.tar.gz)
+- [ ] Strata and terminal-bench Docker images/networks are in no Kent record: decide whether they are bench tooling
+- [ ] Remove the rollback copies /opt/kent-hermes.v0215 and /opt/kent-llama.forkc26cbdf (operator 2026-10-18;
+      pending one sudo dialog)
+
 ## To v0.2.0 — traceability and determinism (design pending)
 
 - [ ] End-to-end trace correlation: one W3C `traceparent` from Kent through the Gent CEO and workers

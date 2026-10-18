@@ -1,0 +1,130 @@
+[
+ {
+  "type": "function",
+  "function": {
+   "name": "web_search",
+   "description": "Search the web. Returns up to 8 results as title, URL and snippet.",
+   "strict": true,
+   "parameters": {
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object",
+    "additionalProperties": false
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "read_web_page",
+   "description": "Fetch a public web page (GET only) and return its readable text.",
+   "strict": true,
+   "parameters": {
+    "properties": {
+     "url": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "type": "object",
+    "additionalProperties": false
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "read_file",
+   "description": "Read a text file from the project workspace (/data/workspace).",
+   "strict": true,
+   "parameters": {
+    "properties": {
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "type": "object",
+    "additionalProperties": false
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "write_file",
+   "description": "Write a text file into the project workspace (/data/workspace). Creates folders.\n    Files starting with a #! line are made executable.",
+   "strict": true,
+   "parameters": {
+    "properties": {
+     "path": {
+      "type": "string"
+     },
+     "content": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "content"
+    ],
+    "type": "object",
+    "additionalProperties": false
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "list_files",
+   "description": "List files in the project workspace.",
+   "strict": true,
+   "parameters": {
+    "properties": {
+     "subdir": {
+      "type": "string"
+     }
+    },
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "subdir"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "run_script",
+   "description": "Run a Python (.py) or shell (.sh) script from the workspace with a 120s timeout.\n    Network access only through the egress proxy. Returns exit code and output.",
+   "strict": true,
+   "parameters": {
+    "properties": {
+     "path": {
+      "type": "string"
+     },
+     "args": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "args"
+    ],
+    "type": "object",
+    "additionalProperties": false
+   }
+  }
+ }
+]

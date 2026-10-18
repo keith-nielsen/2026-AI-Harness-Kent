@@ -1,0 +1,15 @@
+<!doctype html><html><head><title>TQ-40 firmware release notes</title></head><body>
+<h1>TQ-40 firmware release notes</h1>
+<h2>3.4.2 — 2026-08-19 (current stable)</h2>
+<ul><li>Fixes a Wi-Fi reconnect loop after DHCP lease renewal.</li><li>Raises the API rate limit from 5 to 10 requests per second.</li></ul>
+<h2>3.4.1 — 2026-07-02</h2>
+<ul><li>Fixes timestamps drifting by up to 2 s per day when the sample interval is under 1 s.</li></ul>
+<h2>3.4.0 — 2026-05-27</h2>
+<ul><li>Adds the /v2/readings endpoint with cursor pagination.</li><li>Deprecates /v1/readings (removal planned for 4.0).</li></ul>
+<h2>3.3.5 — 2026-03-11</h2>
+<ul><li>Security: fixes an unauthenticated firmware-upload path (HAL-2026-004). Upgrade strongly recommended.</li></ul>
+<h2>3.3.4 — 2026-01-20</h2>
+<ul><li>Battery estimate now accounts for cold-temperature capacity loss.</li></ul>
+<h2>4.0.0-beta.2 — 2026-09-10 (beta, not for production)</h2>
+<ul><li>Removes /v1/readings. Adds MQTT export.</li></ul>
+</body></html>
