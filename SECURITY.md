@@ -2,13 +2,14 @@
 
 ## Supported Versions
 
-Kent is at the v0.1.0 release-candidate stage. Security fixes go to `main` and
-the latest release candidate, and are announced in GitHub Releases.
+Kent is at alpha maturity: a lab-validated reference implementation. Security
+fixes go to `main` and the latest tagged pre-release, and are announced in GitHub
+Releases.
 
 | Version | Supported |
 |---------|-----------|
 | main | ✅ Active development |
-| v0.1.0-rc.x | ✅ Latest release candidate |
+| v0.1.0-rc.x | ✅ Latest tagged pre-release (alpha maturity) |
 
 Kent is a reference implementation, not a certified system. The controls in
 place, and the gaps to close before processing regulated data, are listed in
