@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/Architecture-v3.4.0-green)](docs/architecture.md)
-[![Status](https://img.shields.io/badge/Status-v0.1.0--rc-orange)](https://github.com/keith-nielsen/2026-AI-Harness-Kent/releases)
+[![Maturity](https://img.shields.io/badge/Maturity-alpha-orange)](https://github.com/keith-nielsen/2026-AI-Harness-Kent/releases)
 [![Conformance](https://img.shields.io/badge/Conformance-165%20pass%20%2F%200%20fail-brightgreen)](docs/conformance.md)
 [![Validate](https://github.com/keith-nielsen/2026-AI-Harness-Kent/actions/workflows/validate.yml/badge.svg)](.github/workflows/validate.yml)
 
@@ -21,8 +21,8 @@ or thinking first (two budgets), or a cloud model (Claude Opus 5.5 as frontier,
 DeepSeek V4.1 Flash as cheap; Kent only), falling back to local when a tier fails. Gents learn; Kent curates what they learn into a
 shared template, so every new Gent starts smarter.
 
-> **v0.1.0 is a release candidate of a reference implementation, not a certified
-> system.** [`docs/controls.md`](docs/controls.md) lists every control, its
+> **Kent is a lab-validated reference implementation at alpha maturity: a working
+> proof of concept for testing principles, not a production or certified system.** [`docs/controls.md`](docs/controls.md) lists every control, its
 > evidence and status, including the gaps to close before processing regulated data.
 
 Named after the Earl of Kent in Shakespeare's *King Lear*: loyal, honest,
@@ -147,7 +147,7 @@ tests/                unit, live, Gent isolation, simulation oracle, conformance
 
 ## Status
 
-**v0.1.0 release candidate.** All components installed and verified on the
+**Alpha (latest tag v0.1.0-rc.8).** All components installed and verified on the
 reference machine (RTX 2060 SUPER 8 GB, 64 GB RAM). Pending: Anthropic and DeepSeek
 keys for live cloud calls (until then a simulation oracle stands in), and the gaps listed in [`controls.md`](docs/controls.md) and
 [`conformance.md`](docs/conformance.md) §5. Short-term work is in [`TODO.md`](TODO.md).

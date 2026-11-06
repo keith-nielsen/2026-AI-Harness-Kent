@@ -3,7 +3,7 @@
 Near-term work. Status of every control: [`docs/controls.md`](docs/controls.md);
 assessment history and open items: [`docs/conformance.md`](docs/conformance.md).
 
-**Status:** v0.1.0 release candidate
+**Status:** alpha (lab-validated reference implementation; latest tag v0.1.0-rc.8)
 
 ## To v0.1.0
 
